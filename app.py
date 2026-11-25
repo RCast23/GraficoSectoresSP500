@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 import yfinance as yf
@@ -75,12 +76,14 @@ CSS = """
 .ph .s{font-size:.7rem;opacity:.7;margin:1px 0 6px}
 .ph p{font-size:.78rem;margin:2px 0;line-height:1.3}
 .note{font-size:.72rem;opacity:.6;margin-top:6px}
+a.tile{display:block;text-decoration:none!important;color:inherit!important}
+a.tile:hover{filter:brightness(1.1)}
 </style>
 """
 
 
 # ---------------------------------------------------------------- datos
-@st.cache_data(ttl=240, show_spinner="Descargando precios…")
+@st.cache_data(ttl=1500, show_spinner="Descargando precios…")
 def load_prices() -> pd.DataFrame:
     tickers = TICKERS + [BENCH, "^VIX"]
     df = yf.download(tickers, period="3y", auto_adjust=True, progress=False)["Close"]
@@ -179,6 +182,14 @@ INFO = {
         ("tex", r"\overline{r}_{\text{defensivos}} = \frac{r_{XLP} + r_{XLV} + r_{XLU}}{3}"),
         ("md", "Es una media simple: todos los sectores pesan lo mismo. Si la de los cíclicos es mayor o igual, aparece **modo confianza**; si es menor, **modo cautela**. Tecnología, comunicaciones, inmobiliario y energía no entran en ninguno de los dos grupos. Es una simplificación: orienta, no predice."),
     ],
+    "grafico": [
+        ("md", "Cada **vela** resume un periodo (un día o una semana) con cuatro precios: apertura, máximo, mínimo y cierre. Si cierra por encima de donde abrió, es verde; si cierra por debajo, es roja. El cuerpo va de la apertura al cierre y las mechas llegan hasta el máximo y el mínimo."),
+        ("md", "Las **medias móviles** suavizan el precio para ver la tendencia. Son medias simples de los últimos *n* cierres diarios, con n = 50 y n = 200 sesiones:"),
+        ("tex", r"\text{MM}_n(t) = \frac{1}{n}\sum_{i=0}^{n-1} P_{t-i}"),
+        ("md", "Con velas semanales las medias se siguen calculando sobre cierres diarios y se muestra su valor al final de cada semana. La de 200 necesita 200 sesiones de histórico, por eso se descarga más historia de la que se ve.\n\n**Cruces:** cuando la media de 50 cruza por encima de la de 200 se llama *cruce dorado* (triángulo verde); cuando cruza por debajo, *cruce de la muerte* (triángulo rojo). Como las medias usan datos pasados, los cruces llegan **tarde**: confirman una tendencia que ya ha empezado, no la anticipan, y a menudo dan falsas alarmas.\n\n**Distancia a la media:** cuánto se aleja el precio de cada media."),
+        ("tex", r"\text{Distancia} = \left(\frac{P}{\text{MM}_n} - 1\right) \times 100"),
+        ("md", "Positivo: el precio está por encima de la media. Es una referencia descriptiva, no una señal de compra o venta."),
+    ],
     "estado": [
         ("md", "Clasifica cada sector con dos preguntas:\n\n1. **¿Va mejor que el S&P 500 en el periodo?** (fuerza relativa mayor o igual que 0)\n2. **¿Gana fuerza?** Es su *momentum*: si ha ido mejor que el S&P 500 en el último cuarto del periodo (mínimo 5 sesiones)."),
         ("tex", r"k = \max\left(5, \frac{n}{4}\right)"),
@@ -209,10 +220,12 @@ def grid(items: list[str]) -> str:
 
 
 # ---------------------------------------------------------------- panel
-@st.fragment(run_every=300)  # se refresca solo cada 5 minutos
+@st.fragment(run_every=1800)  # se refresca solo cada 30 minutos
 def dashboard():
+    qp_period = st.query_params.get("p")
     period = st.segmented_control(
-        "Periodo", PERIODS, default="3M", label_visibility="collapsed", key="periodo"
+        "Periodo", PERIODS, default=qp_period if qp_period in PERIODS else "3M",
+        label_visibility="collapsed", key="periodo"
     ) or "3M"
 
     try:
@@ -266,13 +279,14 @@ def dashboard():
     st.markdown(grid(cards), unsafe_allow_html=True)
 
     # --- mapa de calor
-    sec("Mapa de calor por sector", "", "mapa")
+    sec("Mapa de calor por sector", "toca un sector para ver su gráfico", "mapa")
     order = sorted(TICKERS, key=lambda t: ret[t], reverse=True)
     info = {s[0]: s for s in SECTORS}
     tiles = [
-        f"<div class='tile' style='background:{tile_color(ret[t], sat)}'>"
+        f"<a class='tile' href='?sector={t}&amp;p={period}' target='_self' "
+        f"style='background:{tile_color(ret[t], sat)}'>"
         f"<div class='n'>{info[t][1]}</div><div class='d'>{info[t][2]}</div>"
-        f"<div class='v'>{fmt(ret[t])}%</div></div>"
+        f"<div class='v'>{fmt(ret[t])}%</div></a>"
         for t in order
     ]
     st.markdown(grid(tiles), unsafe_allow_html=True)
@@ -358,6 +372,143 @@ def dashboard():
     )
 
 
+# ---------------------------------------------------------------- detalle de un sector
+WINDOWS = {
+    "6M": pd.DateOffset(months=6),
+    "1A": pd.DateOffset(years=1),
+    "2A": pd.DateOffset(years=2),
+    "3A": pd.DateOffset(years=3),
+}
+GROUP_TXT = {"ciclico": "Cíclico", "defensivo": "Defensivo", "otro": "Fuera de cíclicos y defensivos"}
+
+
+@st.cache_data(ttl=1800, show_spinner="Descargando el histórico…")
+def load_ohlc(ticker: str) -> pd.DataFrame:
+    # 5 años: la media de 200 sesiones necesita calentamiento antes de la ventana visible
+    df = yf.download(ticker, period="5y", auto_adjust=True, progress=False)
+    if df is None or df.empty:
+        raise ValueError(f"Yahoo Finance no devolvió datos de {ticker}. Inténtalo de nuevo en unos minutos.")
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df[["Open", "High", "Low", "Close"]].dropna()
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    return df
+
+
+def detail(ticker: str):
+    _, name, desc, group = next(s for s in SECTORS if s[0] == ticker)
+    if st.button("← Volver al panel"):
+        back_period = st.query_params.get("p")
+        st.query_params.clear()
+        if back_period in PERIODS:
+            st.query_params["p"] = back_period
+        st.rerun()
+
+    st.markdown(f"### {name}")
+    st.caption(f"ETF {ticker} · {desc} · {GROUP_TXT[group]}")
+    c1, c2 = st.columns(2)
+    window = c1.segmented_control("Ventana de tiempo", list(WINDOWS), default="1A", key="ventana") or "1A"
+    candles = c2.segmented_control("Tipo de vela", ["Diarias", "Semanales"], default="Diarias", key="velas") or "Diarias"
+
+    try:
+        df = load_ohlc(ticker)
+    except Exception as e:
+        st.error(f"No se pudo descargar el gráfico: {e}")
+        return
+
+    # medias sobre TODO el histórico diario; después se recorta a la ventana visible
+    close = df["Close"]
+    ma50, ma200 = close.rolling(50).mean(), close.rolling(200).mean()
+    start = df.index[-1] - WINDOWS[window]
+    view, ma50v, ma200v = df.loc[start:], ma50.loc[start:], ma200.loc[start:]
+
+    # cruces de medias (en datos diarios)
+    diff = ma50 - ma200
+    prev = diff.shift()
+    up = diff[(diff > 0) & (prev <= 0)].loc[start:].index
+    down = diff[(diff < 0) & (prev >= 0)].loc[start:].index
+
+    if candles == "Semanales":
+        view = view.resample("W-FRI").agg(
+            {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
+        ).dropna()
+        ma50v = ma50v.resample("W-FRI").last().reindex(view.index)
+        ma200v = ma200v.resample("W-FRI").last().reindex(view.index)
+
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=view.index, open=view["Open"], high=view["High"], low=view["Low"], close=view["Close"],
+        name="Precio", increasing_line_color=GREEN_HEX, increasing_fillcolor=GREEN_HEX,
+        decreasing_line_color=RED_HEX, decreasing_fillcolor=RED_HEX,
+    ))
+    fig.add_trace(go.Scatter(x=ma50v.index, y=ma50v, mode="lines", name="Media 50",
+                             line=dict(color="#EF9F27", width=1.6)))
+    fig.add_trace(go.Scatter(x=ma200v.index, y=ma200v, mode="lines", name="Media 200",
+                             line=dict(color="#378ADD", width=1.6)))
+    for idx, label, symbol, color in ((up, "Cruce dorado", "triangle-up", GREEN_HEX),
+                                      (down, "Cruce de la muerte", "triangle-down", RED_HEX)):
+        if len(idx):
+            fig.add_trace(go.Scatter(
+                x=idx, y=ma50.loc[idx], mode="markers", name=label,
+                marker=dict(symbol=symbol, size=11, color=color, line=dict(width=1, color="white")),
+            ))
+    fig.update_layout(
+        height=480, margin=dict(l=4, r=4, t=10, b=4), hovermode="x unified",
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
+    # sin zoom ni arrastre para no bloquear el scroll de la página en el móvil
+    fig.update_xaxes(fixedrange=True)
+    fig.update_yaxes(fixedrange=True)
+    if candles == "Diarias":
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # sin huecos de fin de semana
+
+    sec("Gráfico de velas", "", "grafico")
+    st.plotly_chart(fig, config={"displayModeBar": False})
+    st.markdown(
+        "<div class='note'>Triángulos: cruces de las dos medias (verde: la de 50 pasa por encima de la de 200; "
+        "rojo: pasa por debajo).</div>",
+        unsafe_allow_html=True,
+    )
+
+    # datos bajo el gráfico
+    price, m50, m200 = close.iloc[-1], ma50.iloc[-1], ma200.iloc[-1]
+    ok = pd.notna(m50) and pd.notna(m200)
+    usd = lambda v: f"{fmt(v, 2, False)} USD" if pd.notna(v) else "—"  # noqa: E731
+    dist = lambda m: f"{fmt((price / m - 1) * 100)}%" if pd.notna(m) else "—"  # noqa: E731
+    sec("Dónde está el precio")
+    st.markdown(grid([
+        card("Último cierre", usd(price), f"{df.index[-1]:%d/%m/%Y}"),
+        card("Media 50", usd(m50), f"Precio {dist(m50)} respecto a ella"),
+        card("Media 200", usd(m200), f"Precio {dist(m200)} respecto a ella"),
+        card("Media 50 vs 200", f"{fmt((m50 / m200 - 1) * 100)}%" if ok else "—",
+             "Diferencia entre las dos medias"),
+    ]), unsafe_allow_html=True)
+    if ok:
+        if price > m50 > m200:
+            lectura = "el precio está sobre ambas medias y la de 50 sobre la de 200: tendencia alcista."
+        elif price < m50 < m200:
+            lectura = "el precio está bajo ambas medias y la de 50 bajo la de 200: tendencia bajista."
+        else:
+            lectura = "señales mixtas: el precio y las medias no están alineados."
+        st.markdown(f"<div class='note' style='font-size:.8rem;opacity:.8'>Lectura: {lectura}</div>",
+                    unsafe_allow_html=True)
+
+    st.link_button(f"Ver {ticker} en Investing.com ↗", f"https://es.investing.com/search/?q={ticker}")
+    st.caption("Abre la búsqueda de Investing.com con el ticker del ETF de EE. UU. "
+               "Para el ETF europeo que compres, busca su nombre o su ISIN.")
+    st.markdown(
+        "<div class='note' style='text-align:center;margin-top:18px'>"
+        "Herramienta de seguimiento y aprendizaje. No es asesoramiento financiero.</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------- enrutado
 st.markdown(CSS, unsafe_allow_html=True)
-st.markdown("### Sectores del S&P 500")
-dashboard()
+_sector = st.query_params.get("sector")
+if _sector in TICKERS:
+    detail(_sector)
+else:
+    st.markdown("### Sectores del S&P 500")
+    dashboard()
