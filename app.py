@@ -85,7 +85,14 @@ def load_prices() -> pd.DataFrame:
     tickers = TICKERS + [BENCH, "^VIX"]
     df = yf.download(tickers, period="3y", auto_adjust=True, progress=False)["Close"]
     df.index = pd.to_datetime(df.index).tz_localize(None)
-    return df.dropna(how="all").ffill()
+    df = df.dropna(axis=1, how="all").dropna(how="all").ffill()
+    missing = [t for t in TICKERS + [BENCH] if t not in df.columns]
+    if missing:  # al lanzar un error, esta respuesta no se guarda en caché
+        raise ValueError(
+            "Yahoo Finance no devolvió datos de: " + ", ".join(missing)
+            + ". Inténtalo de nuevo en unos minutos."
+        )
+    return df
 
 
 @st.cache_data(ttl=3600)
@@ -122,6 +129,12 @@ def ref_date(last: pd.Timestamp, period: str) -> pd.Timestamp:
         "1A": last - pd.DateOffset(years=1),
         "YTD": pd.Timestamp(year=last.year - 1, month=12, day=31),
     }[period]
+
+
+def value_at(df: pd.DataFrame, ref: pd.Timestamp) -> pd.Series:
+    """Último valor de cada columna en la fecha ref o antes (por columna, sin exigir que todas coincidan)."""
+    sub = df.loc[:ref]
+    return sub.iloc[-1] if len(sub) else df.iloc[0]
 
 
 # ---------------------------------------------------------------- formato
@@ -213,7 +226,10 @@ def dashboard():
 
     last = prices.index[-1]
     ref = ref_date(last, period)
-    ret = (prices.iloc[-1] / prices.asof(ref) - 1) * 100
+    ret = (prices.iloc[-1] / value_at(prices, ref) - 1) * 100
+    if ret[TICKERS + [BENCH]].isna().any():
+        st.error("Faltan datos de precios para este periodo. Inténtalo de nuevo en unos minutos.")
+        return
     spy = ret[BENCH]
     sat = SATURATION[period]
     now = datetime.now(ZoneInfo("Europe/Madrid"))
@@ -224,9 +240,11 @@ def dashboard():
 
     # --- contexto macro
     sec("Contexto macro", "cambio en el periodo", "macro")
-    vix = prices["^VIX"].dropna()
-    cards = [card("VIX (miedo)", fmt(vix.iloc[-1], 1, False),
-                  f"{fmt(vix.iloc[-1] - vix.asof(ref))} pts")]
+    cards = []
+    if "^VIX" in prices:
+        vix = prices["^VIX"].dropna()
+        cards.append(card("VIX (miedo)", fmt(vix.iloc[-1], 1, False),
+                          f"{fmt(vix.iloc[-1] - vix.asof(ref))} pts"))
     key = fred_key()
     if key:
         try:
