@@ -5,7 +5,7 @@ Macro: FRED (tipos, curva, inflación). Es opcional: sin clave, solo se muestra 
 Herramienta de seguimiento y aprendizaje, no asesoramiento financiero.
 """
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -77,6 +77,7 @@ a.tile:hover{filter:brightness(1.1)}
 .ph .s{font-size:.7rem;opacity:.7;margin:1px 0 6px}
 .ph p{font-size:.78rem;margin:2px 0;line-height:1.3}
 .note{font-size:.72rem;opacity:.6;margin-top:6px}
+.af{font-size:.72rem;opacity:.85;text-align:right;margin-top:2px}
 
 @media (min-width:700px){
   .grid.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -107,7 +108,7 @@ a.tile:hover{filter:brightness(1.1)}
 @st.cache_data(ttl=1500, show_spinner="Descargando precios…")
 def load_prices() -> pd.DataFrame:
     tickers = TICKERS + [BENCH, "^VIX"]
-    df = yf.download(tickers, period="3y", auto_adjust=True, progress=False)["Close"]
+    df = yf.download(tickers, period="6y", auto_adjust=True, progress=False)["Close"]
     df.index = pd.to_datetime(df.index).tz_localize(None)
     df = df.dropna(axis=1, how="all").dropna(how="all").ffill()
     missing = [t for t in TICKERS + [BENCH] if t not in df.columns]
@@ -121,7 +122,7 @@ def load_prices() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def fred(series_id: str, key: str) -> pd.Series:
-    start = (datetime.today() - timedelta(days=3 * 365)).strftime("%Y-%m-%d")
+    start = (datetime.today() - timedelta(days=7 * 365)).strftime("%Y-%m-%d")
     r = requests.get(
         "https://api.stlouisfed.org/fred/series/observations",
         params={"series_id": series_id, "api_key": key, "file_type": "json",
@@ -170,6 +171,24 @@ def value_at(df: pd.DataFrame, ref: pd.Timestamp) -> pd.Series:
     return sub.iloc[-1] if len(sub) else df.iloc[0]
 
 
+def parse_date(txt):
+    try:
+        return datetime.strptime(txt, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def pick_date(label: str, min_d: date, max_d: date, key: str) -> date:
+    """Selector de fecha; por defecto, hoy (o la fecha que venga en la URL)."""
+    qd = parse_date(st.query_params.get("d") or "")
+    default = min(max(qd, min_d), max_d) if qd else max_d
+    picked = st.date_input(label, value=default, min_value=min_d, max_value=max_d,
+                           key=key, format="DD/MM/YYYY")
+    if isinstance(picked, (list, tuple)):
+        picked = picked[0] if picked else default
+    return picked or default
+
+
 # ---------------------------------------------------------------- formato
 def fmt(x: float, d: int = 1, sign: bool = True) -> str:
     s = f"{x:+.{d}f}" if sign else f"{x:.{d}f}"
@@ -186,6 +205,9 @@ def tile_color(x: float, sat: float) -> str:
 
 # Explicaciones de cada bloque: ("md", texto) o ("tex", fórmula)
 INFO = {
+    "fecha": [
+        ("md", "Por defecto el panel muestra la situación actual. Si eliges una **fecha pasada**, todo se calcula como si estuvieras en ese día: solo se usan datos de esa fecha y anteriores, y los periodos (1S, 1M, 3M…) se miden hacia atrás desde ella. Sirve para estudiar cómo estaba el mercado en un momento concreto.\n\n- Si la fecha cae en fin de semana o festivo, se usa el último cierre anterior.\n- **Ver qué pasó después** muestra lo ocurrido desde esa fecha hasta hoy: en el mapa de calor, el rendimiento posterior de cada sector; en el gráfico de velas, las velas posteriores más tenues y una línea en la fecha elegida.\n- La inflación solo usa datos publicados al menos unos 45 días antes de la fecha, que es aproximadamente lo que tarda en publicarse el IPC.\n- Es una herramienta de estudio, no una simulación de operaciones, y el pasado no garantiza el futuro."),
+    ],
     "macro": [
         ("md", "Datos de la economía que influyen en cómo se comportan los sectores. Bajo cada cifra aparece su **cambio en el periodo** elegido."),
         ("tex", r"\text{Cambio} = \text{valor actual} - \text{valor al inicio del periodo}"),
@@ -252,17 +274,29 @@ def grid(items: list[str], cls: str = "") -> str:
 # ---------------------------------------------------------------- panel
 @st.fragment(run_every=1800)  # se refresca solo cada 30 minutos
 def dashboard():
-    qp_period = st.query_params.get("p")
-    period = st.segmented_control(
-        "Periodo", PERIODS, default=qp_period if qp_period in PERIODS else "3M",
-        label_visibility="collapsed", key="periodo"
-    ) or "3M"
-
+    now = datetime.now(ZoneInfo("Europe/Madrid"))
+    today = now.date()
     try:
-        prices = load_prices()
+        full = load_prices()
     except Exception as e:
         st.error(f"No se pudieron descargar los precios: {e}")
         return
+
+    qp_period = st.query_params.get("p")
+    sec("Periodo y fecha de análisis", "por defecto, hoy", "fecha")
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        period = st.segmented_control(
+            "Periodo", PERIODS, default=qp_period if qp_period in PERIODS else "3M", key="periodo"
+        ) or "3M"
+    with c2:
+        asof = pick_date("Fecha de análisis", full.index[0].date() + timedelta(days=366), today, "fecha")
+    # todo el panel se calcula solo con datos hasta la fecha elegida
+    prices = full.loc[:pd.Timestamp(asof)]
+    live = prices.index[-1] == full.index[-1]
+    after = False
+    if not live:
+        after = st.toggle("Ver qué pasó después de esa fecha", value=False, key="despues")
 
     last = prices.index[-1]
     ref = ref_date(last, period)
@@ -272,11 +306,18 @@ def dashboard():
         return
     spy = ret[BENCH]
     sat = SATURATION[period]
-    now = datetime.now(ZoneInfo("Europe/Madrid"))
-    st.caption(
-        f"Último dato de mercado: {last:%d/%m/%Y} · consultado a las {now:%H:%M}. "
-        "Precios con posible retraso de unos 15 min."
-    )
+    if live:
+        st.caption(
+            f"Último dato de mercado: {last:%d/%m/%Y} · consultado a las {now:%H:%M}. "
+            "Precios con posible retraso de unos 15 min."
+        )
+    else:
+        extra = ""
+        if after:
+            fut_spy = (full[BENCH].iloc[-1] / prices[BENCH].iloc[-1] - 1) * 100
+            extra = f" Desde entonces, el S&P 500 ha hecho {fmt(fut_spy)}%."
+        st.info(f"Estás viendo el panel tal como estaba el {last:%d/%m/%Y} "
+                f"(último cierre disponible hasta la fecha elegida), no la situación actual.{extra}")
 
     # --- contexto macro
     sec("Contexto macro", "cambio en el periodo", "macro")
@@ -288,8 +329,9 @@ def dashboard():
     key = fred_key()
     if key:
         try:
-            y10, curve = fred("DGS10", key), fred("T10Y2Y", key)
-            cpi = fred("CPIAUCSL", key)
+            y10 = fred("DGS10", key).loc[:last]
+            curve = fred("T10Y2Y", key).loc[:last]
+            cpi = fred("CPIAUCSL", key).loc[:last - pd.Timedelta(days=45)]  # retraso de publicación del IPC
             yoy = ((cpi / cpi.shift(12) - 1) * 100).dropna()
             cards += [
                 card("Bono 10 años", f"{fmt(y10.iloc[-1], 2, False)}%",
@@ -309,11 +351,15 @@ def dashboard():
     sec("Mapa de calor por sector", "toca un sector para ver su gráfico", "mapa")
     order = sorted(TICKERS, key=lambda t: ret[t], reverse=True)
     info = {s[0]: s for s in SECTORS}
+    dpar = "" if live else f"&amp;d={asof.isoformat()}"
+    fut = (full.iloc[-1] / prices.iloc[-1] - 1) * 100
     tiles = [
-        f"<a class='tile' href='?sector={t}&amp;p={period}' target='_self' "
+        f"<a class='tile' href='?sector={t}&amp;p={period}{dpar}' target='_self' "
         f"style='background:{tile_color(ret[t], sat)}'>"
         f"<div class='n'>{info[t][1]}</div><div class='d'>{info[t][2]}</div>"
-        f"<div class='v'>{fmt(ret[t])}%</div></a>"
+        f"<div class='v'>{fmt(ret[t])}%</div>"
+        + (f"<div class='af'>Después: {fmt(fut[t])}%</div>" if after else "")
+        + "</a>"
         for t in order
     ]
     st.markdown(grid(tiles, "tiles"), unsafe_allow_html=True)
@@ -430,8 +476,8 @@ INVESTING = {
 
 @st.cache_data(ttl=1800, show_spinner="Descargando el histórico…")
 def load_ohlc(ticker: str) -> pd.DataFrame:
-    # 5 años: la media de 200 sesiones necesita calentamiento antes de la ventana visible
-    df = yf.download(ticker, period="5y", auto_adjust=True, progress=False)
+    # 10 años: permite estudiar fechas pasadas y calentar la media de 200 sesiones
+    df = yf.download(ticker, period="10y", auto_adjust=True, progress=False)
     if df is None or df.empty:
         raise ValueError(f"Yahoo Finance no devolvió datos de {ticker}. Inténtalo de nuevo en unos minutos.")
     if isinstance(df.columns, pd.MultiIndex):
@@ -444,20 +490,42 @@ def load_ohlc(ticker: str) -> pd.DataFrame:
 def detail(ticker: str):
     _, name, desc, group = next(s for s in SECTORS if s[0] == ticker)
     mobile = is_mobile()
+    today = datetime.now(ZoneInfo("Europe/Madrid")).date()
     if st.button("← Volver al panel"):
         back_period = st.query_params.get("p")
+        chosen = st.session_state.get("fecha_g")
         st.query_params.clear()
         if back_period in PERIODS:
             st.query_params["p"] = back_period
+        if isinstance(chosen, date) and chosen < today:
+            st.query_params["d"] = chosen.isoformat()
         st.rerun()
 
     st.markdown(f"### {name}")
     st.caption(f"ETF {ticker} · {desc} · {GROUP_TXT[group]}")
+    try:
+        full = load_ohlc(ticker)
+    except Exception as e:
+        st.error(f"No se pudo descargar el gráfico: {e}")
+        return
+
     default_candles = "Semanales" if mobile else "Diarias"  # menos velas = más legible en pantalla estrecha
     c1, c2 = st.columns(2)
     window = c1.segmented_control("Ventana de tiempo", list(WINDOWS), default="1A", key="ventana") or "1A"
     candles = c2.segmented_control("Tipo de vela", ["Diarias", "Semanales"], default=default_candles,
                                    key="velas") or default_candles
+    sec("Fecha de análisis", "por defecto, hoy", "fecha")
+    c3, c4 = st.columns(2)
+    with c3:
+        asof = pick_date("Fecha de análisis", full.index[0].date() + timedelta(days=366), today, "fecha_g")
+    end = full.loc[:pd.Timestamp(asof)].index[-1]  # último cierre disponible hasta esa fecha
+    live = end == full.index[-1]
+    after = False
+    with c4:
+        if not live:
+            after = st.toggle("Ver qué pasó después de esa fecha", value=False, key="despues_g")
+    if not live:
+        st.info(f"Estás viendo el gráfico hasta el {end:%d/%m/%Y}, no la situación actual.")
     touch = True
     if mobile:
         touch = st.toggle(
@@ -466,46 +534,60 @@ def detail(ticker: str):
                  "muestra sus precios, pero en algunos móviles puede impedir hacer scroll sobre el gráfico.",
         )
 
-    try:
-        df = load_ohlc(ticker)
-    except Exception as e:
-        st.error(f"No se pudo descargar el gráfico: {e}")
-        return
-
-    # medias sobre TODO el histórico diario; después se recorta a la ventana visible
-    close = df["Close"]
+    # las medias solo usan datos anteriores a cada punto, así que calcularlas sobre todo el histórico
+    # da el mismo valor que tendrían en esa fecha
+    close = full["Close"]
     ma50, ma200 = close.rolling(50).mean(), close.rolling(200).mean()
-    start = df.index[-1] - WINDOWS[window]
-    view, ma50v, ma200v = df.loc[start:], ma50.loc[start:], ma200.loc[start:]
+    start = end - WINDOWS[window]
+    last_vis = full.index[-1] if after else end
+
+    before = full.loc[start:end]
+    post = full.iloc[0:0]
+    if after:
+        boundary = end
+        if candles == "Semanales" and end.weekday() != 4:
+            boundary = end + pd.offsets.Week(weekday=4)  # las velas semanales se cierran el viernes
+        post = full.loc[boundary + pd.Timedelta(days=1):]
+    ma50v, ma200v = ma50.loc[start:last_vis], ma200.loc[start:last_vis]
+    if candles == "Semanales":
+        agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
+        before = before.resample("W-FRI").agg(agg).dropna()
+        if len(post):
+            post = post.resample("W-FRI").agg(agg).dropna()
+        ma50v, ma200v = ma50v.resample("W-FRI").last(), ma200v.resample("W-FRI").last()
+    idx = before.index.append(post.index)
+    ma50v, ma200v = ma50v.reindex(idx), ma200v.reindex(idx)
 
     # cruces de medias (en datos diarios)
     diff = ma50 - ma200
     prev = diff.shift()
-    up = diff[(diff > 0) & (prev <= 0)].loc[start:].index
-    down = diff[(diff < 0) & (prev >= 0)].loc[start:].index
-
-    if candles == "Semanales":
-        view = view.resample("W-FRI").agg(
-            {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
-        ).dropna()
-        ma50v = ma50v.resample("W-FRI").last().reindex(view.index)
-        ma200v = ma200v.resample("W-FRI").last().reindex(view.index)
+    up = diff[(diff > 0) & (prev <= 0)].loc[start:last_vis].index
+    down = diff[(diff < 0) & (prev >= 0)].loc[start:last_vis].index
 
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
-        x=view.index, open=view["Open"], high=view["High"], low=view["Low"], close=view["Close"],
+        x=before.index, open=before["Open"], high=before["High"], low=before["Low"], close=before["Close"],
         name="Precio", increasing_line_color=GREEN_HEX, increasing_fillcolor=GREEN_HEX,
         decreasing_line_color=RED_HEX, decreasing_fillcolor=RED_HEX,
     ))
-    fig.add_trace(go.Scatter(x=ma50v.index, y=ma50v, mode="lines", name="Media 50",
+    if len(post):
+        fig.add_trace(go.Candlestick(
+            x=post.index, open=post["Open"], high=post["High"], low=post["Low"], close=post["Close"],
+            name="Después", opacity=0.45, increasing_line_color=GREEN_HEX, increasing_fillcolor=GREEN_HEX,
+            decreasing_line_color=RED_HEX, decreasing_fillcolor=RED_HEX,
+        ))
+        x_cut = before.index[-1]
+        fig.add_shape(type="line", x0=x_cut, x1=x_cut, xref="x", y0=0, y1=1, yref="paper",
+                      line=dict(color="rgba(128,128,128,.8)", width=1, dash="dash"))
+    fig.add_trace(go.Scatter(x=idx, y=ma50v, mode="lines", name="Media 50",
                              line=dict(color="#EF9F27", width=1.6)))
-    fig.add_trace(go.Scatter(x=ma200v.index, y=ma200v, mode="lines", name="Media 200",
+    fig.add_trace(go.Scatter(x=idx, y=ma200v, mode="lines", name="Media 200",
                              line=dict(color="#378ADD", width=1.6)))
-    for idx, label, symbol, color in ((up, "Cruce dorado", "triangle-up", GREEN_HEX),
-                                      (down, "Cruce de la muerte", "triangle-down", RED_HEX)):
-        if len(idx):
+    for xs, label, symbol, color in ((up, "Cruce dorado", "triangle-up", GREEN_HEX),
+                                     (down, "Cruce de la muerte", "triangle-down", RED_HEX)):
+        if len(xs):
             fig.add_trace(go.Scatter(
-                x=idx, y=ma50.loc[idx], mode="markers", name=label,
+                x=xs, y=ma50.loc[xs], mode="markers", name=label,
                 marker=dict(symbol=symbol, size=11, color=color, line=dict(width=1, color="white")),
             ))
     # leyenda propia en HTML (la de Plotly ocupa 2-3 filas en pantallas estrechas)
@@ -528,24 +610,26 @@ def detail(ticker: str):
                   "modeBarButtonsToRemove": ["select2d", "lasso2d", "autoScale2d", "toImage"]}
 
     sec("Gráfico de velas", "", "grafico")
+    extra_lg = ("<span>┆ Fecha de análisis</span><span style='opacity:.7'>Velas tenues: lo que pasó después</span>"
+                if len(post) else "")
     st.markdown(
         "<div class='lg2'>"
         "<span><i style='background:#EF9F27'></i>Media 50</span>"
         "<span><i style='background:#378ADD'></i>Media 200</span>"
         f"<span style='color:{GREEN_HEX}'>▲ Cruce dorado</span>"
-        f"<span style='color:{RED_HEX}'>▼ Cruce de la muerte</span></div>",
+        f"<span style='color:{RED_HEX}'>▼ Cruce de la muerte</span>{extra_lg}</div>",
         unsafe_allow_html=True,
     )
     st.plotly_chart(fig, config=config)
 
-    # datos bajo el gráfico
-    price, m50, m200 = close.iloc[-1], ma50.iloc[-1], ma200.iloc[-1]
+    # datos bajo el gráfico (en la fecha de análisis)
+    price, m50, m200 = close.loc[end], ma50.loc[end], ma200.loc[end]
     ok = pd.notna(m50) and pd.notna(m200)
     usd = lambda v: f"{fmt(v, 2, False)} USD" if pd.notna(v) else "—"  # noqa: E731
     dist = lambda m: f"{fmt((price / m - 1) * 100)}%" if pd.notna(m) else "—"  # noqa: E731
     sec("Dónde está el precio")
     st.markdown(grid([
-        card("Último cierre", usd(price), f"{df.index[-1]:%d/%m/%Y}"),
+        card("Cierre", usd(price), f"{end:%d/%m/%Y}"),
         card("Media 50", usd(m50), f"Precio {dist(m50)} respecto a ella"),
         card("Media 200", usd(m200), f"Precio {dist(m200)} respecto a ella"),
         card("Media 50 vs 200", f"{fmt((m50 / m200 - 1) * 100)}%" if ok else "—",
@@ -560,6 +644,13 @@ def detail(ticker: str):
             lectura = "señales mixtas: el precio y las medias no están alineados."
         st.markdown(f"<div class='note' style='font-size:.8rem;opacity:.8'>Lectura: {lectura}</div>",
                     unsafe_allow_html=True)
+    if after:
+        fut = (close.iloc[-1] / price - 1) * 100
+        st.markdown(
+            f"<div class='note' style='font-size:.8rem;opacity:.85'>Después: desde el {end:%d/%m/%Y} "
+            f"hasta el {full.index[-1]:%d/%m/%Y}, {name} ha hecho {fmt(fut)}%.</div>",
+            unsafe_allow_html=True,
+        )
 
     st.link_button(f"Ver {ticker} en Investing.com ↗",
                    INVESTING.get(ticker, f"https://es.investing.com/search/?q={ticker}"))
