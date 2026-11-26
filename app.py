@@ -171,6 +171,24 @@ def value_at(df: pd.DataFrame, ref: pd.Timestamp) -> pd.Series:
     return sub.iloc[-1] if len(sub) else df.iloc[0]
 
 
+HORIZONS = {
+    "+1M": pd.DateOffset(months=1),
+    "+3M": pd.DateOffset(months=3),
+    "+6M": pd.DateOffset(months=6),
+    "+1A": pd.DateOffset(years=1),
+}
+AFTER_OPTIONS = ["Oculto", "+1M", "+3M", "+6M", "+1A", "Hasta hoy"]
+
+
+def after_end(base, choice, last_avail):
+    """Fecha hasta la que se muestra lo ocurrido después de `base` (None si está oculto)."""
+    if choice == "Oculto":
+        return None
+    if choice == "Hasta hoy":
+        return last_avail
+    return min(base + HORIZONS[choice], last_avail)
+
+
 def parse_date(txt):
     try:
         return datetime.strptime(txt, "%Y-%m-%d").date()
@@ -206,7 +224,7 @@ def tile_color(x: float, sat: float) -> str:
 # Explicaciones de cada bloque: ("md", texto) o ("tex", fórmula)
 INFO = {
     "fecha": [
-        ("md", "Por defecto el panel muestra la situación actual. Si eliges una **fecha pasada**, todo se calcula como si estuvieras en ese día: solo se usan datos de esa fecha y anteriores, y los periodos (1S, 1M, 3M…) se miden hacia atrás desde ella. Sirve para estudiar cómo estaba el mercado en un momento concreto.\n\n- Si la fecha cae en fin de semana o festivo, se usa el último cierre anterior.\n- **Ver qué pasó después** muestra lo ocurrido desde esa fecha hasta hoy: en el mapa de calor, el rendimiento posterior de cada sector; en el gráfico de velas, las velas posteriores más tenues y una línea en la fecha elegida.\n- La inflación solo usa datos publicados al menos unos 45 días antes de la fecha, que es aproximadamente lo que tarda en publicarse el IPC.\n- Es una herramienta de estudio, no una simulación de operaciones, y el pasado no garantiza el futuro."),
+        ("md", "Por defecto el panel muestra la situación actual. Si eliges una **fecha pasada**, todo se calcula como si estuvieras en ese día: solo se usan datos de esa fecha y anteriores, y los periodos (1S, 1M, 3M…) se miden hacia atrás desde ella. Sirve para estudiar cómo estaba el mercado en un momento concreto.\n\n- Si la fecha cae en fin de semana o festivo, se usa el último cierre anterior.\n- **Ver qué pasó después** te deja elegir el horizonte (+1M, +3M, +6M, +1A o hasta hoy; empieza en Oculto). En el mapa de calor añade el rendimiento posterior de cada sector hasta ese punto; en el gráfico de velas, las velas posteriores más tenues y una línea en la fecha elegida. Si el horizonte aún no ha llegado, se muestra hasta el último dato disponible.\n- La inflación solo usa datos publicados al menos unos 45 días antes de la fecha, que es aproximadamente lo que tarda en publicarse el IPC.\n- Es una herramienta de estudio, no una simulación de operaciones, y el pasado no garantiza el futuro."),
     ],
     "macro": [
         ("md", "Datos de la economía que influyen en cómo se comportan los sectores. Bajo cada cifra aparece su **cambio en el periodo** elegido."),
@@ -294,11 +312,16 @@ def dashboard():
     # todo el panel se calcula solo con datos hasta la fecha elegida
     prices = full.loc[:pd.Timestamp(asof)]
     live = prices.index[-1] == full.index[-1]
-    after = False
+    horizon = "Oculto"
     if not live:
-        after = st.toggle("Ver qué pasó después de esa fecha", value=False, key="despues")
+        horizon = st.segmented_control(
+            "Ver qué pasó después de esa fecha", AFTER_OPTIONS, default="Oculto", key="horizonte"
+        ) or "Oculto"
 
     last = prices.index[-1]
+    fut_end = after_end(last, horizon, full.index[-1])
+    after = fut_end is not None
+    capped = after and horizon in HORIZONS and last + HORIZONS[horizon] > full.index[-1]
     ref = ref_date(last, period)
     ret = (prices.iloc[-1] / value_at(prices, ref) - 1) * 100
     if ret[TICKERS + [BENCH]].isna().any():
@@ -314,8 +337,10 @@ def dashboard():
     else:
         extra = ""
         if after:
-            fut_spy = (full[BENCH].iloc[-1] / prices[BENCH].iloc[-1] - 1) * 100
-            extra = f" Desde entonces, el S&P 500 ha hecho {fmt(fut_spy)}%."
+            fut_spy = (value_at(full, fut_end)[BENCH] / prices[BENCH].iloc[-1] - 1) * 100
+            extra = f" Hasta el {fut_end:%d/%m/%Y}, el S&P 500 ha hecho {fmt(fut_spy)}%."
+            if capped:
+                extra += " (Aún no hay datos para todo el horizonte elegido.)"
         st.info(f"Estás viendo el panel tal como estaba el {last:%d/%m/%Y} "
                 f"(último cierre disponible hasta la fecha elegida), no la situación actual.{extra}")
 
@@ -352,13 +377,14 @@ def dashboard():
     order = sorted(TICKERS, key=lambda t: ret[t], reverse=True)
     info = {s[0]: s for s in SECTORS}
     dpar = "" if live else f"&amp;d={asof.isoformat()}"
-    fut = (full.iloc[-1] / prices.iloc[-1] - 1) * 100
+    fut = (value_at(full, fut_end) / prices.iloc[-1] - 1) * 100 if after else None
+    after_lbl = "hasta hoy" if horizon == "Hasta hoy" else horizon
     tiles = [
         f"<a class='tile' href='?sector={t}&amp;p={period}{dpar}' target='_self' "
         f"style='background:{tile_color(ret[t], sat)}'>"
         f"<div class='n'>{info[t][1]}</div><div class='d'>{info[t][2]}</div>"
         f"<div class='v'>{fmt(ret[t])}%</div>"
-        + (f"<div class='af'>Después: {fmt(fut[t])}%</div>" if after else "")
+        + (f"<div class='af'>Después ({after_lbl}): {fmt(fut[t])}%</div>" if after else "")
         + "</a>"
         for t in order
     ]
@@ -520,10 +546,15 @@ def detail(ticker: str):
         asof = pick_date("Fecha de análisis", full.index[0].date() + timedelta(days=366), today, "fecha_g")
     end = full.loc[:pd.Timestamp(asof)].index[-1]  # último cierre disponible hasta esa fecha
     live = end == full.index[-1]
-    after = False
+    horizon = "Oculto"
     with c4:
         if not live:
-            after = st.toggle("Ver qué pasó después de esa fecha", value=False, key="despues_g")
+            horizon = st.segmented_control(
+                "Ver qué pasó después", AFTER_OPTIONS, default="Oculto", key="horizonte_g"
+            ) or "Oculto"
+    fut_end = after_end(end, horizon, full.index[-1])
+    after = fut_end is not None
+    capped = after and horizon in HORIZONS and end + HORIZONS[horizon] > full.index[-1]
     if not live:
         st.info(f"Estás viendo el gráfico hasta el {end:%d/%m/%Y}, no la situación actual.")
     touch = True
@@ -539,7 +570,7 @@ def detail(ticker: str):
     close = full["Close"]
     ma50, ma200 = close.rolling(50).mean(), close.rolling(200).mean()
     start = end - WINDOWS[window]
-    last_vis = full.index[-1] if after else end
+    last_vis = fut_end if after else end
 
     before = full.loc[start:end]
     post = full.iloc[0:0]
@@ -547,7 +578,7 @@ def detail(ticker: str):
         boundary = end
         if candles == "Semanales" and end.weekday() != 4:
             boundary = end + pd.offsets.Week(weekday=4)  # las velas semanales se cierran el viernes
-        post = full.loc[boundary + pd.Timedelta(days=1):]
+        post = full.loc[boundary + pd.Timedelta(days=1):fut_end]
     ma50v, ma200v = ma50.loc[start:last_vis], ma200.loc[start:last_vis]
     if candles == "Semanales":
         agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
@@ -645,10 +676,11 @@ def detail(ticker: str):
         st.markdown(f"<div class='note' style='font-size:.8rem;opacity:.8'>Lectura: {lectura}</div>",
                     unsafe_allow_html=True)
     if after:
-        fut = (close.iloc[-1] / price - 1) * 100
+        fut = (close.loc[:fut_end].iloc[-1] / price - 1) * 100
+        aviso = " Aún no hay datos para todo el horizonte elegido." if capped else ""
         st.markdown(
             f"<div class='note' style='font-size:.8rem;opacity:.85'>Después: desde el {end:%d/%m/%Y} "
-            f"hasta el {full.index[-1]:%d/%m/%Y}, {name} ha hecho {fmt(fut)}%.</div>",
+            f"hasta el {fut_end:%d/%m/%Y}, {name} ha hecho {fmt(fut)}%.{aviso}</div>",
             unsafe_allow_html=True,
         )
 
