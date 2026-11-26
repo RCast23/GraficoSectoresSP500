@@ -93,6 +93,12 @@ a.tile:hover{filter:brightness(1.1)}
 }
 @media (min-width:1000px){.grid.tiles{grid-template-columns:repeat(4,minmax(0,1fr))}}
 
+/* selector de fecha + botón Hoy en la misma fila (también en móvil) */
+[class*="st-key-daterow_"] [data-testid="stHorizontalBlock"]{flex-direction:row!important;flex-wrap:nowrap!important;align-items:flex-end;gap:.5rem}
+[class*="st-key-daterow_"] :is([data-testid="stColumn"],[data-testid="column"]){min-width:0!important;width:auto!important}
+[class*="st-key-daterow_"] :is([data-testid="stColumn"],[data-testid="column"]):first-child{flex:1 1 0!important}
+[class*="st-key-daterow_"] :is([data-testid="stColumn"],[data-testid="column"]):last-child{flex:0 0 auto!important}
+
 /* título de bloque + botón ⓘ en la misma línea (también en móvil) */
 [class*="st-key-hdr_"]{margin:1.3rem 0 .4rem}
 [class*="st-key-hdr_"] [data-testid="stHorizontalBlock"]{flex-direction:row!important;flex-wrap:nowrap!important;align-items:center;justify-content:flex-start;gap:.5rem}
@@ -177,7 +183,6 @@ HORIZONS = {
     "+6M": pd.DateOffset(months=6),
     "+1A": pd.DateOffset(years=1),
 }
-AFTER_OPTIONS = ["Oculto", "+1M", "+3M", "+6M", "+1A", "Hasta hoy"]
 
 
 def after_end(base, choice, last_avail):
@@ -187,6 +192,20 @@ def after_end(base, choice, last_avail):
     if choice == "Hasta hoy":
         return last_avail
     return min(base + HORIZONS[choice], last_avail)
+
+
+def horizon_picker(base, last_avail, key: str) -> str:
+    """Selector de horizonte: solo ofrece los que ya han ocurrido a partir de `base`."""
+    opts = ["Oculto"] + [h for h, off in HORIZONS.items() if base + off <= last_avail] + ["Hasta hoy"]
+    if st.session_state.get(key) not in opts:  # la selección anterior ya no es válida con esta fecha
+        st.session_state[key] = "Oculto"
+    return st.segmented_control("Ver qué pasó después de esa fecha", opts, key=key) or "Oculto"
+
+
+def _go_today(key: str):
+    st.session_state[key] = datetime.now(ZoneInfo("Europe/Madrid")).date()
+    if "d" in st.query_params:
+        del st.query_params["d"]
 
 
 def parse_date(txt):
@@ -200,11 +219,17 @@ def pick_date(label: str, min_d: date, max_d: date, key: str) -> date:
     """Selector de fecha; por defecto, hoy (o la fecha que venga en la URL)."""
     qd = parse_date(st.query_params.get("d") or "")
     default = min(max(qd, min_d), max_d) if qd else max_d
-    picked = st.date_input(label, value=default, min_value=min_d, max_value=max_d,
-                           key=key, format="DD/MM/YYYY")
-    if isinstance(picked, (list, tuple)):
-        picked = picked[0] if picked else default
-    return picked or default
+    with st.container(key=f"daterow_{key}"):
+        col_d, col_b = st.columns([3, 1])
+        with col_d:
+            picked = st.date_input(label, value=default, min_value=min_d, max_value=max_d,
+                                   key=key, format="DD/MM/YYYY")
+        if isinstance(picked, (list, tuple)):
+            picked = picked[0] if picked else default
+        picked = picked or default
+        with col_b:
+            st.button("Hoy", key=f"hoy_{key}", on_click=_go_today, args=(key,), disabled=picked >= max_d)
+    return picked
 
 
 # ---------------------------------------------------------------- formato
@@ -224,7 +249,7 @@ def tile_color(x: float, sat: float) -> str:
 # Explicaciones de cada bloque: ("md", texto) o ("tex", fórmula)
 INFO = {
     "fecha": [
-        ("md", "Por defecto el panel muestra la situación actual. Si eliges una **fecha pasada**, todo se calcula como si estuvieras en ese día: solo se usan datos de esa fecha y anteriores, y los periodos (1S, 1M, 3M…) se miden hacia atrás desde ella. Sirve para estudiar cómo estaba el mercado en un momento concreto.\n\n- Si la fecha cae en fin de semana o festivo, se usa el último cierre anterior.\n- **Ver qué pasó después** te deja elegir el horizonte (+1M, +3M, +6M, +1A o hasta hoy; empieza en Oculto). En el mapa de calor añade el rendimiento posterior de cada sector hasta ese punto; en el gráfico de velas, las velas posteriores más tenues y una línea en la fecha elegida. Si el horizonte aún no ha llegado, se muestra hasta el último dato disponible.\n- La inflación solo usa datos publicados al menos unos 45 días antes de la fecha, que es aproximadamente lo que tarda en publicarse el IPC.\n- Es una herramienta de estudio, no una simulación de operaciones, y el pasado no garantiza el futuro."),
+        ("md", "Por defecto el panel muestra la situación actual. Si eliges una **fecha pasada**, todo se calcula como si estuvieras en ese día: solo se usan datos de esa fecha y anteriores, y los periodos (1S, 1M, 3M…) se miden hacia atrás desde ella. Sirve para estudiar cómo estaba el mercado en un momento concreto.\n\n- Si la fecha cae en fin de semana o festivo, se usa el último cierre anterior.\n- **Ver qué pasó después** te deja elegir el horizonte (+1M, +3M, +6M, +1A o hasta hoy; empieza en Oculto). En el mapa de calor añade el rendimiento posterior de cada sector hasta ese punto; en el gráfico de velas, las velas posteriores más tenues y una línea en la fecha elegida. Solo se ofrecen los horizontes que ya han ocurrido: con una fecha de hace dos semanas, por ejemplo, no hay +1M.\n- El botón **Hoy** vuelve a la situación actual.\n- La inflación solo usa datos publicados al menos unos 45 días antes de la fecha, que es aproximadamente lo que tarda en publicarse el IPC.\n- Es una herramienta de estudio, no una simulación de operaciones, y el pasado no garantiza el futuro."),
     ],
     "macro": [
         ("md", "Datos de la economía que influyen en cómo se comportan los sectores. Bajo cada cifra aparece su **cambio en el periodo** elegido."),
@@ -312,16 +337,12 @@ def dashboard():
     # todo el panel se calcula solo con datos hasta la fecha elegida
     prices = full.loc[:pd.Timestamp(asof)]
     live = prices.index[-1] == full.index[-1]
+    last = prices.index[-1]
     horizon = "Oculto"
     if not live:
-        horizon = st.segmented_control(
-            "Ver qué pasó después de esa fecha", AFTER_OPTIONS, default="Oculto", key="horizonte"
-        ) or "Oculto"
-
-    last = prices.index[-1]
+        horizon = horizon_picker(last, full.index[-1], "horizonte")
     fut_end = after_end(last, horizon, full.index[-1])
     after = fut_end is not None
-    capped = after and horizon in HORIZONS and last + HORIZONS[horizon] > full.index[-1]
     ref = ref_date(last, period)
     ret = (prices.iloc[-1] / value_at(prices, ref) - 1) * 100
     if ret[TICKERS + [BENCH]].isna().any():
@@ -339,8 +360,6 @@ def dashboard():
         if after:
             fut_spy = (value_at(full, fut_end)[BENCH] / prices[BENCH].iloc[-1] - 1) * 100
             extra = f" Hasta el {fut_end:%d/%m/%Y}, el S&P 500 ha hecho {fmt(fut_spy)}%."
-            if capped:
-                extra += " (Aún no hay datos para todo el horizonte elegido.)"
         st.info(f"Estás viendo el panel tal como estaba el {last:%d/%m/%Y} "
                 f"(último cierre disponible hasta la fecha elegida), no la situación actual.{extra}")
 
@@ -549,12 +568,9 @@ def detail(ticker: str):
     horizon = "Oculto"
     with c4:
         if not live:
-            horizon = st.segmented_control(
-                "Ver qué pasó después", AFTER_OPTIONS, default="Oculto", key="horizonte_g"
-            ) or "Oculto"
+            horizon = horizon_picker(end, full.index[-1], "horizonte_g")
     fut_end = after_end(end, horizon, full.index[-1])
     after = fut_end is not None
-    capped = after and horizon in HORIZONS and end + HORIZONS[horizon] > full.index[-1]
     if not live:
         st.info(f"Estás viendo el gráfico hasta el {end:%d/%m/%Y}, no la situación actual.")
     touch = True
@@ -677,10 +693,9 @@ def detail(ticker: str):
                     unsafe_allow_html=True)
     if after:
         fut = (close.loc[:fut_end].iloc[-1] / price - 1) * 100
-        aviso = " Aún no hay datos para todo el horizonte elegido." if capped else ""
         st.markdown(
             f"<div class='note' style='font-size:.8rem;opacity:.85'>Después: desde el {end:%d/%m/%Y} "
-            f"hasta el {fut_end:%d/%m/%Y}, {name} ha hecho {fmt(fut)}%.{aviso}</div>",
+            f"hasta el {fut_end:%d/%m/%Y}, {name} ha hecho {fmt(fut)}%.</div>",
             unsafe_allow_html=True,
         )
 
