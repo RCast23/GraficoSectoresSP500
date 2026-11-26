@@ -33,6 +33,11 @@ SECTORS = [
 ]
 TICKERS = [s[0] for s in SECTORS]
 NAME = {s[0]: s[1] for s in SECTORS}
+EN = {  # nombres en inglés (clasificación GICS), para reconocerlos en otras webs y apps
+    "XLK": "Information Technology", "XLC": "Communication Services", "XLY": "Consumer Discretionary",
+    "XLF": "Financials", "XLI": "Industrials", "XLB": "Materials", "XLRE": "Real Estate",
+    "XLV": "Health Care", "XLP": "Consumer Staples", "XLU": "Utilities", "XLE": "Energy",
+}
 BENCH = "SPY"
 PERIODS = ["1S", "1M", "3M", "6M", "YTD", "1A"]
 # A partir de este % (en valor absoluto) el color del mapa de calor llega al máximo
@@ -50,6 +55,7 @@ CSS = """
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .tile{border-radius:10px;padding:8px 10px}
 .tile .n{font-size:.85rem;font-weight:600;line-height:1.25}
+.tile .en{font-size:.7rem;opacity:.75;font-style:italic;line-height:1.2;margin-top:1px}
 .tile .d{font-size:.7rem;opacity:.7;margin:1px 0 6px;line-height:1.25}
 .tile .v{font-size:1rem;font-weight:600;text-align:right}
 a.tile{display:block;text-decoration:none!important;color:inherit!important}
@@ -78,6 +84,9 @@ a.tile:hover{filter:brightness(1.1)}
 .ph p{font-size:.78rem;margin:2px 0;line-height:1.3}
 .note{font-size:.72rem;opacity:.6;margin-top:6px}
 .af{font-size:.72rem;opacity:.85;text-align:right;margin-top:2px}
+.chg{width:100%;border-collapse:collapse;font-size:.78rem;margin-top:6px}
+.chg th{font-weight:600;text-align:left;opacity:.7;padding:4px 6px}
+.chg td{padding:4px 6px;border-top:1px solid rgba(128,128,128,.2)}
 
 @media (min-width:700px){
   .grid.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -106,6 +115,13 @@ a.tile:hover{filter:brightness(1.1)}
 [class*="st-key-hdr_"] :is([data-testid="stColumn"],[data-testid="column"]):first-child{flex:0 1 auto!important}
 [class*="st-key-hdr_"] :is([data-testid="stColumn"],[data-testid="column"]):last-child{flex:0 0 auto!important}
 [class*="st-key-hdr_"] button{padding:0 .6rem;min-height:1.8rem}
+
+/* ventana de ayuda: fórmulas y tablas no se salen de la pantalla (scroll horizontal si hace falta) */
+[data-testid="stPopoverBody"]{max-width:calc(100vw - 1.5rem)!important}
+.katex{font-size:1.05em}
+.katex-display{overflow-x:auto;overflow-y:hidden;max-width:100%;padding:.2rem 0;margin:.5em 0}
+[data-testid="stPopoverBody"] table{display:block;overflow-x:auto;max-width:100%}
+@media (max-width:640px){.katex{font-size:.9em}}
 </style>
 """
 
@@ -252,23 +268,30 @@ INFO = {
         ("md", "Por defecto el panel muestra la situación actual. Si eliges una **fecha pasada**, todo se calcula como si estuvieras en ese día: solo se usan datos de esa fecha y anteriores, y los periodos (1S, 1M, 3M…) se miden hacia atrás desde ella. Sirve para estudiar cómo estaba el mercado en un momento concreto.\n\n- Si la fecha cae en fin de semana o festivo, se usa el último cierre anterior.\n- **Ver qué pasó después** te deja elegir el horizonte (+1M, +3M, +6M, +1A o hasta hoy; empieza en Oculto). En el mapa de calor añade el rendimiento posterior de cada sector hasta ese punto; en el gráfico de velas, las velas posteriores más tenues y una línea en la fecha elegida. Solo se ofrecen los horizontes que ya han ocurrido: con una fecha de hace dos semanas, por ejemplo, no hay +1M.\n- El botón **Hoy** vuelve a la situación actual.\n- La inflación solo usa datos publicados al menos unos 45 días antes de la fecha, que es aproximadamente lo que tarda en publicarse el IPC.\n- Es una herramienta de estudio, no una simulación de operaciones, y el pasado no garantiza el futuro."),
     ],
     "macro": [
-        ("md", "Datos de la economía que influyen en cómo se comportan los sectores. Bajo cada cifra aparece su **cambio en el periodo** elegido."),
-        ("tex", r"\text{Cambio} = \text{valor actual} - \text{valor al inicio del periodo}"),
-        ("md", "- **VIX (miedo):** mide la volatilidad que el mercado espera para el S&P 500 en los próximos 30 días. Lo calcula la CBOE a partir de los precios de las opciones del S&P 500; aquí es un dato ya calculado. Como orientación, por debajo de 20 suele indicar calma y por encima de 30, tensión fuerte. Su cambio se mide en puntos.\n- **Bono 10 años:** rentabilidad anual del bono del Tesoro de EE. UU. a 10 años. Es un dato directo de FRED. Si sube, el dinero se vuelve más caro. Su cambio se mide en puntos porcentuales (pp).\n- **Curva 10a-2a:** diferencia entre la rentabilidad del bono a 10 años y la del bono a 2 años. Si es negativa (curva invertida), históricamente ha precedido a recesiones, aunque no es una garantía."),
-        ("tex", r"\text{Curva} = \text{rentab. bono 10 años} - \text{rentab. bono 2 años}"),
-        ("md", "- **Inflación anual:** cuánto han subido los precios (IPC de EE. UU.) respecto al mismo mes del año anterior. Se publica una vez al mes y con retraso."),
-        ("tex", r"\text{Inflación} = \left(\frac{IPC_{\text{mes actual}}}{IPC_{\text{hace 12 meses}}} - 1\right) \times 100"),
+        ("md", "Datos de la economía que influyen en cómo se comportan los sectores. Bajo cada cifra aparece su **cambio en el periodo** elegido. Las escalas de abajo son orientativas y simplificadas: no existe un umbral oficial de alto o bajo."),
+        ("tex", r"\text{Cambio} = \text{valor actual} - \text{valor inicial}"),
+        ("md", "**VIX (miedo):** mide la volatilidad que el mercado espera para el S&P 500 en los próximos 30 días. Lo calcula la CBOE a partir de los precios de sus opciones; aquí es un dato ya calculado. Su cambio se mide en puntos.\n\n| VIX | Lectura |\n|---|---|\n| Menos de 15 | Calma total |\n| 15 – 20 | Calma |\n| 20 – 30 | Nerviosismo |\n| Más de 30 | Tensión fuerte |"),
+        ("md", "**Bono 10 años:** rentabilidad anual que paga el bono del Tesoro de EE. UU. a 10 años (dato directo de FRED). Su cambio se mide en puntos porcentuales (pp). ¿Está alto o bajo? Depende de con qué lo compares.\n\n**1. Frente a su historia reciente:**\n\n| Rentabilidad | Lectura |\n|---|---|\n| Menos de 2% | Muy baja (típica de 2020–2021) |\n| 2% – 3% | Baja |\n| 3% – 4% | Media |\n| 4% – 5% | Alta |\n| Más de 5% | Muy alta (máximos desde 2007) |\n\nReferencias: el máximo histórico semanal fue 15,68% (octubre de 1981) y el mínimo, 0,55% (agosto de 2020). La media anual fue 0,89% en 2020, 1,45% en 2021, 2,95% en 2022, 3,96% en 2023 y 4,19% en 2024. A finales de octubre de 2026 rondaba el 5% (dato fechado: puede haber cambiado)."),
+        ("md", "**2. Frente a la inflación** (rentabilidad real aproximada): un bono que rinde un 4% con una inflación del 3,5% da muy poco en términos reales."),
+        ("tex", r"\text{Rentab. real} \approx \text{bono 10 años} - \text{inflación anual}"),
+        ("md", "| Rentabilidad real | Lectura |\n|---|---|\n| Negativa | Muy baja: no compensa la inflación |\n| 0% – 1% | Baja |\n| 1% – 2% | Media |\n| Más de 2% | Alta |\n\n**Qué suele implicar:** con rentabilidades altas el dinero es caro, lo que suele presionar a inmobiliario, servicios públicos y empresas muy endeudadas o de crecimiento, y puede favorecer a los bancos hasta cierto punto. Con rentabilidades bajas ocurre lo contrario. Son tendencias generales, no reglas."),
+        ("md", "**Curva 10a-2a:** diferencia entre la rentabilidad del bono a 10 años y la del bono a 2 años."),
+        ("tex", r"\begin{aligned}\text{Curva} &= \text{rentab. bono 10 años}\\ &\quad - \text{rentab. bono 2 años}\end{aligned}"),
+        ("md", "| Curva (pp) | Lectura |\n|---|---|\n| Más de +1 | Pronunciada |\n| 0 a +1 | Normal o plana |\n| Negativa | Invertida: históricamente ha precedido a recesiones, aunque a veces da falsas alarmas |"),
+        ("md", "**Inflación anual:** cuánto han subido los precios (IPC de EE. UU.) respecto al mismo mes del año anterior. Se publica una vez al mes y con retraso. El objetivo de la Reserva Federal es un 2%; por encima de un 3% se considera alta."),
+        ("tex", r"\text{Inflación} = \left(\frac{IPC_t}{IPC_{t-12}} - 1\right) \times 100"),
+        ("md", "Aquí *t* es el mes actual y *t−12*, el mismo mes del año anterior."),
     ],
     "mapa": [
         ("md", "Cada casilla es un sector del S&P 500 con lo que ha subido o bajado en el periodo elegido. Cada sector se sigue con un ETF de SPDR, un fondo que replica ese sector. **Toca una casilla para abrir el gráfico de velas de ese sector.**"),
         ("tex", r"\text{Rendimiento} = \left(\frac{P_{\text{final}}}{P_{\text{inicio}}} - 1\right) \times 100"),
         ("md", "- **P final:** último precio disponible.\n- **P inicio:** último cierre en la fecha de inicio del periodo (hace 7 días, 1, 3, 6 o 12 meses; en YTD, el último cierre del año anterior).\n- Los precios están ajustados por dividendos, así que el resultado incluye lo que reparten.\n\n**Color:** el gris es 0%. Cuanto más se aleja de 0, más intenso es el verde (sube) o el rojo (baja), hasta llegar al color máximo en un umbral que depende del periodo."),
         ("tex", r"\text{intensidad} = \min\left(\frac{|\text{rendimiento}|}{\text{umbral}}, 1\right)"),
-        ("md", "Umbrales: 1S ±4%, 1M ±8%, 3M ±15%, 6M ±20%, YTD ±25%, 1A ±35%.\n\n**ETF de cada sector:** Tecnología XLK, Comunicaciones XLC, Consumo discrecional XLY, Finanzas XLF, Industria XLI, Materiales XLB, Inmobiliario XLRE, Salud XLV, Consumo básico XLP, Servicios públicos XLU, Energía XLE."),
+        ("md", "Umbrales: 1S ±4%, 1M ±8%, 3M ±15%, 6M ±20%, YTD ±25%, 1A ±35%.\n\n**Nombre de cada sector en español, en inglés y su ETF:**\n\n| Español | English | ETF |\n|---|---|---|\n| Tecnología | Information Technology | XLK |\n| Comunicaciones | Communication Services | XLC |\n| Consumo discrecional | Consumer Discretionary | XLY |\n| Finanzas | Financials | XLF |\n| Industria | Industrials | XLI |\n| Materiales | Materials | XLB |\n| Inmobiliario | Real Estate | XLRE |\n| Salud | Health Care | XLV |\n| Consumo básico | Consumer Staples | XLP |\n| Servicios públicos | Utilities | XLU |\n| Energía | Energy | XLE |"),
     ],
     "fuerza": [
         ("md", "Compara cada sector con el mercado (el S&P 500, que se sigue con el ETF SPY). Responde a: ¿va mejor o peor que el conjunto?"),
-        ("tex", r"\text{Fuerza relativa} = \text{rendimiento del sector} - \text{rendimiento del S\&P 500}"),
+        ("tex", r"\begin{aligned}\text{Fuerza relativa} &= \text{rendim. del sector}\\ &\quad - \text{rendim. del S\&P 500}\end{aligned}"),
         ("md", "Se expresa en **puntos porcentuales (pp)**, no en %. Ejemplo: si el sector sube un 5% y el S&P 500 un 3%, su fuerza relativa es +2 pp.\n\nPositivo (verde): va mejor que el mercado. Negativo (rojo): va peor. Un sector puede subir y aun así salir en rojo si sube menos que el mercado. La longitud de las barras se escala respecto al valor más grande."),
     ],
     "ciclo": [
@@ -288,8 +311,8 @@ INFO = {
     "estado": [
         ("md", "Clasifica cada sector con dos preguntas:\n\n1. **¿Va mejor que el S&P 500 en el periodo?** (fuerza relativa mayor o igual que 0)\n2. **¿Gana fuerza?** Es su *momentum*: si ha ido mejor que el S&P 500 en el último cuarto del periodo (mínimo 5 sesiones)."),
         ("tex", r"k = \max\left(5, \frac{n}{4}\right)"),
-        ("tex", r"\text{Momentum} = \left(\frac{P_t}{P_{t-k}} - 1\right)_{\text{sector}} - \left(\frac{P_t}{P_{t-k}} - 1\right)_{\text{S\&P 500}}"),
-        ("md", "Aquí *n* es el número de sesiones del periodo y *k* las del tramo reciente.\n\n- **Liderando:** fuerza relativa ≥ 0 y momentum ≥ 0.\n- **Debilitándose:** fuerza relativa ≥ 0 y momentum < 0.\n- **Mejorando:** fuerza relativa < 0 y momentum ≥ 0.\n- **Rezagados:** fuerza relativa < 0 y momentum < 0.\n\nEs una versión sencilla de los gráficos de rotación sectorial. Describe lo que ha pasado, no predice lo que pasará."),
+        ("tex", r"\begin{aligned}\text{Momentum} &= r^{k}_{\text{sector}} - r^{k}_{\text{S\&P 500}}\\ r^{k} &= \frac{P_t}{P_{t-k}} - 1\end{aligned}"),
+        ("md", "Aquí *n* es el número de sesiones del periodo y *k* las del tramo reciente.\n\n- **Liderando:** fuerza relativa ≥ 0 y momentum ≥ 0.\n- **Debilitándose:** fuerza relativa ≥ 0 y momentum < 0.\n- **Mejorando:** fuerza relativa < 0 y momentum ≥ 0.\n- **Rezagados:** fuerza relativa < 0 y momentum < 0.\n\nEs una versión sencilla de los gráficos de rotación sectorial. Describe lo que ha pasado, no predice lo que pasará.\n\nCon **Ver qué pasó después** se añade una tabla que compara el estado de cada sector en la fecha de análisis con su estado al final del horizonte elegido, calculado igual y con el mismo periodo. ▲ indica que ha mejorado (por ejemplo, de Rezagados a Mejorando), ▼ que ha empeorado y = que no ha cambiado."),
     ],
 }
 
@@ -312,6 +335,31 @@ def card(label: str, value: str, change: str) -> str:
 
 def grid(items: list[str], cls: str = "") -> str:
     return f"<div class='grid {cls}'>" + "".join(items) + "</div>"
+
+
+STATE_RANK = {"Rezagados": 0, "Mejorando": 1, "Debilitándose": 2, "Liderando": 3}
+
+
+def sector_states(px: pd.DataFrame, period: str) -> dict:
+    """Estado de cada sector como si se mirara el panel en el último día de `px`.
+
+    Fuerza relativa del periodo (>= 0: mejor que el S&P 500) y momentum: si el sector ha ido
+    mejor que el S&P 500 en el último cuarto del periodo (mín. 5 sesiones).
+    """
+    last = px.index[-1]
+    ref = ref_date(last, period)
+    r = (px.iloc[-1] / value_at(px, ref) - 1) * 100
+    k = max(5, len(px.loc[ref:]) // 4)
+    w = px[TICKERS + [BENCH]].iloc[-(k + 1):]
+    rec = (w.iloc[-1] / w.iloc[0] - 1) * 100
+    out = {}
+    for t in TICKERS:
+        gaining = rec[t] - rec[BENCH] >= 0
+        if r[t] - r[BENCH] >= 0:
+            out[t] = "Liderando" if gaining else "Debilitándose"
+        else:
+            out[t] = "Mejorando" if gaining else "Rezagados"
+    return out
 
 
 # ---------------------------------------------------------------- panel
@@ -401,7 +449,7 @@ def dashboard():
     tiles = [
         f"<a class='tile' href='?sector={t}&amp;p={period}{dpar}' target='_self' "
         f"style='background:{tile_color(ret[t], sat)}'>"
-        f"<div class='n'>{info[t][1]}</div><div class='d'>{info[t][2]}</div>"
+        f"<div class='n'>{info[t][1]}</div><div class='en'>{EN[t]}</div><div class='d'>{info[t][2]}</div>"
         f"<div class='v'>{fmt(ret[t])}%</div>"
         + (f"<div class='af'>Después ({after_lbl}): {fmt(fut[t])}%</div>" if after else "")
         + "</a>"
@@ -461,17 +509,10 @@ def dashboard():
         # Fuerza relativa del periodo (>= 0: mejor que el S&P 500) y momentum: si el sector
         # ha ido mejor que el S&P 500 en el último cuarto del periodo (mín. 5 sesiones).
         sec("Estado de cada sector en el ciclo", "", "estado")
-        n = len(prices.loc[ref:])
-        k = max(5, n // 4)
-        window = prices[TICKERS + [BENCH]].iloc[-(k + 1):]
-        rec = (window.iloc[-1] / window.iloc[0] - 1) * 100
+        st_now = sector_states(prices, period)
         states = {"Liderando": [], "Debilitándose": [], "Mejorando": [], "Rezagados": []}
         for t in sorted(TICKERS, key=rel.get, reverse=True):
-            gaining = rec[t] - rec[BENCH] >= 0
-            if rel[t] >= 0:
-                states["Liderando" if gaining else "Debilitándose"].append(NAME[t])
-            else:
-                states["Mejorando" if gaining else "Rezagados"].append(NAME[t])
+            states[st_now[t]].append(NAME[t])
         desc = {"Liderando": "Fuertes y acelerando", "Debilitándose": "Fuertes, pero frenan",
                 "Mejorando": "Flojos, pero recuperan", "Rezagados": "Débiles y sin impulso"}
         boxes = [
@@ -481,6 +522,26 @@ def dashboard():
             for s, names in states.items()
         ]
         st.markdown(grid(boxes), unsafe_allow_html=True)
+        if after:
+            # mismo cálculo, pero como si se mirara el panel al final del horizonte elegido
+            st_after = sector_states(full.loc[:fut_end], period)
+            body = ""
+            for t in sorted(TICKERS, key=rel.get, reverse=True):
+                a, b = STATE_RANK[st_now[t]], STATE_RANK[st_after[t]]
+                if b > a:
+                    mark = f"<span style='color:{GREEN_HEX}'>▲</span>"
+                elif b < a:
+                    mark = f"<span style='color:{RED_HEX}'>▼</span>"
+                else:
+                    mark = "<span style='opacity:.5'>=</span>"
+                body += f"<tr><td>{NAME[t]}</td><td>{st_now[t]}</td><td>{st_after[t]} {mark}</td></tr>"
+            st.markdown(
+                "<div class='note' style='font-size:.8rem;opacity:.85;margin-top:10px'>Cómo cambió el estado: "
+                f"en la fecha de análisis y el {fut_end:%d/%m/%Y} ({after_lbl}), con el mismo periodo.</div>"
+                f"<table class='chg'><tr><th>Sector</th><th>En la fecha</th><th>Después ({after_lbl})</th></tr>"
+                f"{body}</table>",
+                unsafe_allow_html=True,
+            )
         lectura = ("los cíclicos van por delante de los defensivos, algo típico de una fase de expansión."
                    if ci >= de else
                    "los defensivos van por delante de los cíclicos, algo típico de una fase de cautela.")
@@ -547,7 +608,7 @@ def detail(ticker: str):
         st.rerun()
 
     st.markdown(f"### {name}")
-    st.caption(f"ETF {ticker} · {desc} · {GROUP_TXT[group]}")
+    st.caption(f"{EN[ticker]} · ETF {ticker} · {desc} · {GROUP_TXT[group]}")
     try:
         full = load_ohlc(ticker)
     except Exception as e:
