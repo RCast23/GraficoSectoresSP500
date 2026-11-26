@@ -412,6 +412,21 @@ WINDOWS = {
 }
 GROUP_TXT = {"ciclico": "Cíclico", "defensivo": "Defensivo", "otro": "Fuera de cíclicos y defensivos"}
 
+# Fichas de cada ETF en Investing.com (en el móvil abren la app si está instalada)
+INVESTING = {
+    "XLK": "https://es.investing.com/etfs/spdr-select-sector---technology",
+    "XLC": "https://es.investing.com/etfs/communication-services-select-spdr",
+    "XLY": "https://es.investing.com/etfs/spdr-consumer-discr.-select-sector",
+    "XLF": "https://es.investing.com/etfs/financial-select-sector-spdr-fund",
+    "XLI": "https://es.investing.com/etfs/industrial-sector-spdr-trust",
+    "XLB": "https://es.investing.com/etfs/spdr-materials-select-sector-etf",
+    "XLRE": "https://es.investing.com/etfs/real-estate-select-sector-spdr",
+    "XLV": "https://es.investing.com/etfs/spdr---health-care",
+    "XLP": "https://es.investing.com/etfs/spdr---consumer-staples",
+    "XLU": "https://es.investing.com/etfs/spdr-select-sector---utilities",
+    "XLE": "https://es.investing.com/etfs/spdr-energy-select-sector-fund",
+}
+
 
 @st.cache_data(ttl=1800, show_spinner="Descargando el histórico…")
 def load_ohlc(ticker: str) -> pd.DataFrame:
@@ -546,8 +561,9 @@ def detail(ticker: str):
         st.markdown(f"<div class='note' style='font-size:.8rem;opacity:.8'>Lectura: {lectura}</div>",
                     unsafe_allow_html=True)
 
-    st.link_button(f"Ver {ticker} en Investing.com ↗", f"https://es.investing.com/search/?q={ticker}")
-    st.caption("Abre la búsqueda de Investing.com con el ticker del ETF de EE. UU. "
+    st.link_button(f"Ver {ticker} en Investing.com ↗",
+                   INVESTING.get(ticker, f"https://es.investing.com/search/?q={ticker}"))
+    st.caption("Abre la ficha del ETF de EE. UU. en Investing.com; en el móvil, en su app si la tienes instalada. "
                "Para el ETF europeo que compres, busca su nombre o su ISIN.")
     st.markdown(
         "<div class='note' style='text-align:center;margin-top:18px'>"
