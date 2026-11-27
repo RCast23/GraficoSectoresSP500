@@ -64,6 +64,8 @@ a.tile:hover{filter:brightness(1.1)}
 .card .l{font-size:.75rem;opacity:.7}
 .card .v{font-size:1.25rem;font-weight:600}
 .card .c{font-size:.72rem;opacity:.7;margin-top:2px;line-height:1.25}
+.card .a{font-size:.72rem;margin-top:6px;padding-top:6px;border-top:1px solid rgba(128,128,128,.25);line-height:1.3}
+.card .lv{font-size:.78rem;font-weight:600;margin-top:2px;line-height:1.25}
 .row{display:flex;align-items:center;gap:8px;font-size:.78rem;margin:6px 0}
 .row .n{width:108px;opacity:.8;line-height:1.25}
 .row .val{width:58px;text-align:right;font-weight:600}
@@ -71,8 +73,10 @@ a.tile:hover{filter:brightness(1.1)}
 .half{width:50%;display:flex}
 .half.l{justify-content:flex-end;border-right:1px solid rgba(128,128,128,.5)}
 .bar{height:12px}
-.sec{font-size:.85rem;opacity:.7;display:flex;align-items:baseline;gap:8px}
-.sec span{font-size:.72rem;opacity:.8}
+.sec{font-size:.85rem;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.sec .t{opacity:.7}
+.sec .r{font-size:.72rem;opacity:.6}
+.chip{font-size:.78rem;padding:2px 8px;border-radius:6px;font-weight:600}
 .legend{display:flex;flex-wrap:wrap;align-items:center;gap:5px;font-size:.7rem;opacity:.7;margin-top:8px}
 .legend i{display:block;width:20px;height:10px;border-radius:2px}
 .lg2{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.75rem;margin:2px 0 4px;opacity:.9}
@@ -96,7 +100,7 @@ a.tile:hover{filter:brightness(1.1)}
   .tile .d{font-size:.75rem}
   .tile .v{font-size:1.15rem}
   .card .v{font-size:1.4rem}
-  .card .l,.card .c{font-size:.8rem}
+  .card .l,.card .c,.card .a{font-size:.8rem}
   .row{font-size:.85rem}
   .row .n{width:150px}
 }
@@ -262,80 +266,132 @@ def tile_color(x: float, sat: float) -> str:
     return f"rgba({r},{g},{b},{0.18 + 0.62 * p:.2f})"
 
 
+BLUE, AMBER = (55, 138, 221), (239, 159, 39)
+
+# Escalas de color y franjas de cada dato macro (orientativas; se explican en el botón ⓘ del bloque).
+# stops: (valor, color) entre los que se interpola; cuts/labels: límites y nombre de cada franja.
+MACRO_SCALES = {
+    "vix": dict(stops=[(12, GREEN), (20, GREY), (27, AMBER), (35, RED)],
+                cuts=[15, 20, 30], labels=["Calma total", "Calma", "Nerviosismo", "Tensión fuerte"]),
+    "bono": dict(stops=[(1.0, BLUE), (3.0, GREY), (3.75, GREEN), (4.5, AMBER), (5.5, RED)],
+                 cuts=[2, 3, 4, 5], labels=["Muy baja", "Baja", "Media", "Alta", "Muy alta"]),
+    "real": dict(stops=[(-1.5, BLUE), (1.0, GREY), (1.75, GREEN), (2.5, AMBER), (3.5, RED)],
+                 cuts=[0, 1, 2], labels=["Muy baja", "Baja", "Media", "Alta"]),
+    "curva": dict(stops=[(-1.0, RED), (0.0, AMBER), (0.5, GREEN), (1.5, GREEN)],
+                  cuts=[0, 1], labels=["Invertida", "Normal o plana", "Pronunciada"]),
+    "infl": dict(stops=[(0.0, BLUE), (1.5, GREEN), (2.5, GREEN), (4.0, AMBER), (6.0, RED)],
+                 cuts=[1, 3, 5], labels=["Muy baja", "Normal", "Alta", "Muy alta"]),
+}
+# El ratio discrecional / básico se colora por su cambio (como el mapa de calor); % a partir del cual el color es máximo
+RATIO_SAT = {"1S": 2, "1M": 4, "3M": 7, "6M": 10, "YTD": 12, "1A": 17}
+
+
+def macro_level(metric: str, x: float):
+    """Devuelve (nombre de la franja, color de fondo) de un dato macro."""
+    sc = MACRO_SCALES[metric]
+    stops = sc["stops"]
+    if x <= stops[0][0]:
+        rgb = stops[0][1]
+    elif x >= stops[-1][0]:
+        rgb = stops[-1][1]
+    else:
+        rgb = stops[-1][1]
+        for (x0, c0), (x1, c1) in zip(stops, stops[1:]):
+            if x0 <= x <= x1:
+                f = (x - x0) / (x1 - x0)
+                rgb = tuple(round(a + (b - a) * f) for a, b in zip(c0, c1))
+                break
+    label = sc["labels"][-1]
+    for cut, lab in zip(sc["cuts"], sc["labels"]):
+        if x < cut:
+            label = lab
+            break
+    return label, f"rgba({rgb[0]},{rgb[1]},{rgb[2]},0.4)"
+
+
 # Explicaciones de cada bloque: ("md", texto) o ("tex", fórmula)
 INFO = {
     "fecha": [
-        ("md", "Por defecto el panel muestra la situación actual. Si eliges una **fecha pasada**, todo se calcula como si estuvieras en ese día: solo se usan datos de esa fecha y anteriores, y los periodos (1S, 1M, 3M…) se miden hacia atrás desde ella. Sirve para estudiar cómo estaba el mercado en un momento concreto.\n\n- Si la fecha cae en fin de semana o festivo, se usa el último cierre anterior.\n- **Ver qué pasó después** te deja elegir el horizonte (+1M, +3M, +6M, +1A o hasta hoy; empieza en Oculto). En el mapa de calor añade el rendimiento posterior de cada sector hasta ese punto; en el gráfico de velas, las velas posteriores más tenues y una línea en la fecha elegida. Solo se ofrecen los horizontes que ya han ocurrido: con una fecha de hace dos semanas, por ejemplo, no hay +1M.\n- El botón **Hoy** vuelve a la situación actual.\n- La inflación solo usa datos publicados al menos unos 45 días antes de la fecha, que es aproximadamente lo que tarda en publicarse el IPC.\n- Es una herramienta de estudio, no una simulación de operaciones, y el pasado no garantiza el futuro."),
+        ("md", "Por defecto el panel muestra la situación actual. Si eliges una **fecha pasada**, todo se calcula como si estuvieras en ese día: solo se usan datos de esa fecha y anteriores, y los periodos (1S, 1M, 3M…) se miden hacia atrás desde ella. Sirve para estudiar cómo estaba el mercado en un momento concreto.\n\n- Si la fecha cae en fin de semana o festivo, se usa el último cierre anterior.\n- **Ver qué pasó después** te deja elegir el horizonte (+1M, +3M, +6M, +1A o hasta hoy; empieza en Oculto). En el mapa de calor añade el rendimiento posterior de cada sector hasta ese punto; en el contexto macro, el valor de cada dato al final del horizonte y cuánto ha cambiado desde la fecha de análisis; en el gráfico de velas, las velas posteriores más tenues y una línea en la fecha elegida. Solo se ofrecen los horizontes que ya han ocurrido: con una fecha de hace dos semanas, por ejemplo, no hay +1M.\n- El botón **Hoy** vuelve a la situación actual.\n- La inflación solo usa datos publicados al menos unos 45 días antes de la fecha, que es aproximadamente lo que tarda en publicarse el IPC.\n- Es una herramienta de estudio, no una simulación de operaciones, y el pasado no garantiza el futuro."),
     ],
     "macro": [
-        ("md", "Datos de la economía que influyen en cómo se comportan los sectores. Bajo cada cifra aparece su **cambio en el periodo** elegido. Las escalas de abajo son orientativas y simplificadas: no existe un umbral oficial de alto o bajo."),
+        ("md", "Datos de la economía que influyen en cómo se comportan los sectores. Bajo cada cifra aparece su **cambio en el periodo** elegido. Las escalas de abajo son orientativas y simplificadas: no existe un umbral oficial de alto o bajo.\n\n**Colores:** cada tarjeta se tiñe según su nivel (y el nivel aparece también en palabras bajo la cifra): verde = normal o tranquilo, ámbar = elevado, rojo = alto o tensión, azul = muy bajo y gris = punto medio. El color indica el nivel, no si es bueno o malo para ti: por ejemplo, una rentabilidad alta es mala para quien pide un préstamo y buena para quien ahorra. El ratio discrecional / básico se colorea según su cambio en el periodo, como el mapa de calor (verde si sube, rojo si baja)."),
         ("tex", r"\text{Cambio} = \text{valor actual} - \text{valor inicial}"),
+        ("md", "**Dónde:** *valor actual* es el dato en la fecha de análisis (o el último disponible) y *valor inicial*, el dato al comenzar el periodo elegido (por ejemplo, hace 3 meses). El resultado se da en puntos (VIX), en puntos porcentuales (bono, curva, inflación) o en % (ratio discrecional / básico)."),
         ("md", "**VIX (miedo):** mide la volatilidad que el mercado espera para el S&P 500 en los próximos 30 días. Lo calcula la CBOE a partir de los precios de sus opciones; aquí es un dato ya calculado. Su cambio se mide en puntos.\n\n| VIX | Lectura |\n|---|---|\n| Menos de 15 | Calma total |\n| 15 – 20 | Calma |\n| 20 – 30 | Nerviosismo |\n| Más de 30 | Tensión fuerte |"),
         ("md", "**Bono 10 años:** rentabilidad anual que paga el bono del Tesoro de EE. UU. a 10 años (dato directo de FRED). Su cambio se mide en puntos porcentuales (pp). ¿Está alto o bajo? Depende de con qué lo compares.\n\n**1. Frente a su historia reciente:**\n\n| Rentabilidad | Lectura |\n|---|---|\n| Menos de 2% | Muy baja (típica de 2020–2021) |\n| 2% – 3% | Baja |\n| 3% – 4% | Media |\n| 4% – 5% | Alta |\n| Más de 5% | Muy alta (máximos desde 2007) |\n\nReferencias: el máximo histórico semanal fue 15,68% (octubre de 1981) y el mínimo, 0,55% (agosto de 2020). La media anual fue 0,89% en 2020, 1,45% en 2021, 2,95% en 2022, 3,96% en 2023 y 4,19% en 2024. A finales de octubre de 2026 rondaba el 5% (dato fechado: puede haber cambiado)."),
-        ("md", "**2. Frente a la inflación** (rentabilidad real aproximada): un bono que rinde un 4% con una inflación del 3,5% da muy poco en términos reales."),
+        ("md", "**2. Frente a la inflación** (rentabilidad real aproximada): un bono que rinde un 4% con una inflación del 3,5% da muy poco en términos reales. Es la tarjeta **Bono real (aprox.)**."),
         ("tex", r"\text{Rentab. real} \approx \text{bono 10 años} - \text{inflación anual}"),
+        ("md", "**Dónde:** *bono 10 años* es la rentabilidad actual de ese bono (en %) e *inflación anual* es la subida de precios de los últimos 12 meses (en %). Ejemplo: 4,2% − 3,0% = 1,2% de rentabilidad real."),
         ("md", "| Rentabilidad real | Lectura |\n|---|---|\n| Negativa | Muy baja: no compensa la inflación |\n| 0% – 1% | Baja |\n| 1% – 2% | Media |\n| Más de 2% | Alta |"),
         ("md", "**Qué implica que el bono a 10 años suba o baje**\n\nIdea clave: el precio de un bono y su rentabilidad van en sentido contrario. Si los inversores venden bonos, su precio baja y su rentabilidad sube; si los compran, ocurre lo contrario. Esa rentabilidad es la referencia de lo que cuesta el dinero a largo plazo: hipotecas, créditos a empresas y la valoración de casi cualquier activo se miden contra ella.\n\n**Si está alta o sube:**\n- El crédito es más caro (hipotecas, deuda de empresas).\n- Los bonos compiten mejor con las acciones, y los beneficios futuros valen menos hoy.\n- Suelen sufrir más: inmobiliario, servicios públicos, empresas muy endeudadas y de crecimiento, como buena parte de tecnología.\n- Suelen aguantar mejor: bancos y aseguradoras, hasta cierto punto.\n\n**Si está baja o baja:**\n- El crédito es más barato y las acciones resultan más atractivas frente a los bonos.\n- Suelen beneficiarse: inmobiliario, servicios públicos y crecimiento.\n- Suelen notarlo los bancos, por un margen de intereses más estrecho."),
         ("md", "**Por qué se mueve:** sube cuando el mercado espera más crecimiento, más inflación o tipos más altos de los bancos centrales; baja cuando espera una economía más débil, menos inflación o recortes de tipos, y también cuando los inversores buscan refugio. Por eso **el mismo nivel puede significar cosas distintas**: una subida porque la economía va fuerte suele sentar bien a la bolsa; una subida por miedo a la inflación, mal. Los movimientos bruscos suelen importar más que el nivel. Conviene mirarlo junto con la inflación (rentabilidad real) y con la curva 10a-2a. Son tendencias generales, no reglas."),
         ("md", "**Curva 10a-2a:** diferencia entre la rentabilidad del bono a 10 años y la del bono a 2 años."),
         ("tex", r"\begin{aligned}\text{Curva} &= \text{rentab. bono 10 años}\\ &\quad - \text{rentab. bono 2 años}\end{aligned}"),
+        ("md", "**Dónde:** *rentab. bono 10 años* y *rentab. bono 2 años* son las rentabilidades actuales de esos dos bonos (en %). El resultado se da en puntos porcentuales (pp). Ejemplo: 4,1% − 3,7% = +0,4 pp."),
         ("md", "| Curva (pp) | Lectura |\n|---|---|\n| Más de +1 | Pronunciada |\n| 0 a +1 | Normal o plana |\n| Negativa | Invertida: históricamente ha precedido a recesiones, aunque a veces da falsas alarmas |"),
         ("md", "**Inflación anual:** cuánto han subido los precios (IPC de EE. UU.) respecto al mismo mes del año anterior. Se publica una vez al mes y con retraso. El objetivo de la Reserva Federal es un 2%; por encima de un 3% se considera alta."),
         ("tex", r"\text{Inflación} = \left(\frac{IPC_t}{IPC_{t-12}} - 1\right) \times 100"),
-        ("md", "Aquí *t* es el mes actual y *t−12*, el mismo mes del año anterior."),
+        ("md", "**Dónde:** *IPC* es el índice de precios al consumo, un número que mide el nivel de precios en cada mes. *IPC t* es el del mes actual (el último publicado) e *IPC t−12*, el del mismo mes del año anterior. El × 100 lo expresa en %. Ejemplo: si el IPC pasa de 300 a 309, la inflación es (309 / 300 − 1) × 100 = 3%."),
+        ("md", "| Inflación anual | Lectura |\n|---|---|\n| Menos de 1% | Muy baja |\n| 1% – 3% | Normal (el objetivo es 2%) |\n| 3% – 5% | Alta |\n| Más de 5% | Muy alta |"),
         ("md", "**Discrecional / básico:** compara el precio del ETF de consumo discrecional (coches, ropa, ocio) con el de consumo básico (alimentación, higiene). Si sube, los inversores prefieren lo que depende de que la gente gaste con confianza; si baja, prefieren lo que se consume siempre. Es una pista del apetito por el riesgo del mercado, no una señal."),
         ("tex", r"\text{Ratio} = \frac{P_{\text{discrecional}}}{P_{\text{básico}}}"),
-        ("md", "El valor del ratio en sí no importa (depende de los precios de los dos ETFs); lo que importa es su **cambio en el periodo**, que aparece bajo la cifra. A veces gira antes que el mercado, pero no siempre acierta."),
+        ("md", "**Dónde:** *P discrecional* es el precio de cierre del ETF de consumo discrecional y *P básico*, el del ETF de consumo básico. El valor del ratio en sí no importa (depende de los precios de los dos ETFs); lo que importa es su **cambio en el periodo**, que aparece bajo la cifra. A veces gira antes que el mercado, pero no siempre acierta.\n\nSe colorea con el método del mapa de calor: gris si no cambia y verde o rojo más intenso cuanto mayor es el cambio, hasta ±2% (1S), ±4% (1M), ±7% (3M), ±10% (6M), ±12% (YTD) y ±17% (1A). Si el cambio supera un cuarto de ese umbral, el nivel dice *Más apetito por riesgo* (sube) o *Más cautela* (baja)."),
     ],
     "mapa": [
         ("md", "Cada casilla es un sector del S&P 500 con lo que ha subido o bajado en el periodo elegido. Cada sector se sigue con un ETF de SPDR, un fondo que replica ese sector. **Toca una casilla para abrir el gráfico de velas de ese sector.**"),
         ("tex", r"\text{Rendimiento} = \left(\frac{P_{\text{final}}}{P_{\text{inicio}}} - 1\right) \times 100"),
-        ("md", "- **P final:** último precio disponible.\n- **P inicio:** último cierre en la fecha de inicio del periodo (hace 7 días, 1, 3, 6 o 12 meses; en YTD, el último cierre del año anterior).\n- Los precios están ajustados por dividendos, así que el resultado incluye lo que reparten.\n\n**Color:** el gris es 0%. Cuanto más se aleja de 0, más intenso es el verde (sube) o el rojo (baja), hasta llegar al color máximo en un umbral que depende del periodo."),
+        ("md", "**Dónde:**\n- **P final:** último precio disponible en la fecha de análisis.\n- **P inicio:** último cierre en la fecha de inicio del periodo (hace 7 días, 1, 3, 6 o 12 meses; en YTD, el último cierre del año anterior).\n- El × 100 convierte el resultado en %.\n- Los precios están ajustados por dividendos, así que el resultado incluye lo que reparten.\n\n**Color:** el gris es 0%. Cuanto más se aleja de 0, más intenso es el verde (sube) o el rojo (baja), hasta llegar al color máximo en un umbral que depende del periodo."),
         ("tex", r"\text{intensidad} = \min\left(\frac{|\text{rendimiento}|}{\text{umbral}}, 1\right)"),
-        ("md", "Umbrales: 1S ±4%, 1M ±8%, 3M ±15%, 6M ±20%, YTD ±25%, 1A ±35%.\n\n**Nombre de cada sector en español, en inglés y su ETF:**\n\n| Español | English | ETF |\n|---|---|---|\n| Tecnología | Information Technology | XLK |\n| Comunicaciones | Communication Services | XLC |\n| Consumo discrecional | Consumer Discretionary | XLY |\n| Finanzas | Financials | XLF |\n| Industria | Industrials | XLI |\n| Materiales | Materials | XLB |\n| Inmobiliario | Real Estate | XLRE |\n| Salud | Health Care | XLV |\n| Consumo básico | Consumer Staples | XLP |\n| Servicios públicos | Utilities | XLU |\n| Energía | Energy | XLE |"),
+        ("md", "**Dónde:** *rendimiento* es el % de la casilla, sin signo, y *umbral* es el % a partir del cual el color llega al máximo. *min(…, 1)* limita el resultado a 1: con 0 la casilla es gris y con 1 tiene el verde o el rojo más intenso.\n\nUmbrales: 1S ±4%, 1M ±8%, 3M ±15%, 6M ±20%, YTD ±25%, 1A ±35%.\n\n**Nombre de cada sector en español, en inglés y su ETF:**\n\n| Español | English | ETF |\n|---|---|---|\n| Tecnología | Information Technology | XLK |\n| Comunicaciones | Communication Services | XLC |\n| Consumo discrecional | Consumer Discretionary | XLY |\n| Finanzas | Financials | XLF |\n| Industria | Industrials | XLI |\n| Materiales | Materials | XLB |\n| Inmobiliario | Real Estate | XLRE |\n| Salud | Health Care | XLV |\n| Consumo básico | Consumer Staples | XLP |\n| Servicios públicos | Utilities | XLU |\n| Energía | Energy | XLE |"),
     ],
     "fuerza": [
-        ("md", "Compara cada sector con el mercado (el S&P 500, que se sigue con el ETF SPY). Responde a: ¿va mejor o peor que el conjunto?"),
+        ("md", "Compara cada sector con el mercado (el S&P 500, que se sigue con el ETF SPY). Responde a: ¿va mejor o peor que el conjunto? El porcentaje del S&P 500 junto al título se colorea con la misma escala que el mapa de calor."),
         ("tex", r"\begin{aligned}\text{Fuerza relativa} &= \text{rendim. del sector}\\ &\quad - \text{rendim. del S\&P 500}\end{aligned}"),
-        ("md", "Se expresa en **puntos porcentuales (pp)**, no en %. Ejemplo: si el sector sube un 5% y el S&P 500 un 3%, su fuerza relativa es +2 pp.\n\nPositivo (verde): va mejor que el mercado. Negativo (rojo): va peor. Un sector puede subir y aun así salir en rojo si sube menos que el mercado. La longitud de las barras se escala respecto al valor más grande."),
+        ("md", "**Dónde:** *rendim. del sector* y *rendim. del S&P 500* son lo que ha subido o bajado cada uno en el mismo periodo (en %), calculado como en el mapa de calor.\n\nSe expresa en **puntos porcentuales (pp)**, no en %. Ejemplo: si el sector sube un 5% y el S&P 500 un 3%, su fuerza relativa es +2 pp.\n\nPositivo (verde): va mejor que el mercado. Negativo (rojo): va peor. Un sector puede subir y aun así salir en rojo si sube menos que el mercado. La longitud de las barras se escala respecto al valor más grande."),
     ],
     "ciclo": [
         ("md", "Agrupa sectores según su sensibilidad a la economía y compara el rendimiento medio de cada grupo.\n\n- **Cíclicos** (rinden mejor cuando la economía va bien): consumo discrecional, finanzas, industria y materiales.\n- **Defensivos** (aguantan mejor en las crisis): consumo básico, salud y servicios públicos."),
         ("tex", r"\overline{r}_{\text{cíclicos}} = \frac{r_{XLY} + r_{XLF} + r_{XLI} + r_{XLB}}{4}"),
         ("tex", r"\overline{r}_{\text{defensivos}} = \frac{r_{XLP} + r_{XLV} + r_{XLU}}{3}"),
-        ("md", "Es una media simple: todos los sectores pesan lo mismo. Si la de los cíclicos es mayor o igual, aparece **modo confianza**; si es menor, **modo cautela**. Tecnología, comunicaciones, inmobiliario y energía no entran en ninguno de los dos grupos. Es una simplificación: orienta, no predice."),
+        ("md", "**Dónde:** *r* es el rendimiento en el periodo (en %) del ETF de cada sector, y el nombre de abajo indica cuál: XLY es consumo discrecional, XLF finanzas, XLI industria, XLB materiales, XLP consumo básico, XLV salud y XLU servicios públicos. La barra sobre la *r* indica que es una media, y se divide entre 4 y entre 3 porque ese es el número de sectores de cada grupo.\n\nEs una media simple: todos los sectores pesan lo mismo. Si la de los cíclicos es mayor o igual, aparece **modo confianza**; si es menor, **modo cautela**. Tecnología, comunicaciones, inmobiliario y energía no entran en ninguno de los dos grupos. Es una simplificación: orienta, no predice."),
     ],
     "grafico": [
         ("md", "Cada **vela** resume un periodo (un día o una semana) con cuatro precios: apertura, máximo, mínimo y cierre. Si cierra por encima de donde abrió, es verde; si cierra por debajo, es roja. El cuerpo va de la apertura al cierre y las mechas llegan hasta el máximo y el mínimo."),
         ("md", "Las **medias móviles** suavizan el precio para ver la tendencia. Son medias simples de los últimos *n* cierres diarios, con n = 50 y n = 200 sesiones:"),
         ("tex", r"\text{MM}_n(t) = \frac{1}{n}\sum_{i=0}^{n-1} P_{t-i}"),
+        ("md", "**Dónde:** *MM* es la media móvil de *n* sesiones en el día *t*; *n* es cuántas sesiones promedia (50 o 200); *P t−i* es el precio de cierre de hace *i* sesiones (con *i* = 0 es el día *t*, con *i* = 1 el día anterior, y así hasta *n* − 1); y el símbolo Σ indica sumar esos *n* cierres antes de dividir entre *n*."),
         ("md", "Con velas semanales las medias se siguen calculando sobre cierres diarios y se muestra su valor al final de cada semana. La de 200 necesita 200 sesiones de histórico, por eso se descarga más historia de la que se ve.\n\n**Cruces:** cuando la media de 50 cruza por encima de la de 200 se llama *cruce dorado* (triángulo verde); cuando cruza por debajo, *cruce de la muerte* (triángulo rojo). Como las medias usan datos pasados, los cruces llegan **tarde**: confirman una tendencia que ya ha empezado, no la anticipan, y a menudo dan falsas alarmas.\n\n**Distancia a la media:** cuánto se aleja el precio de cada media."),
         ("tex", r"\text{Distancia} = \left(\frac{P}{\text{MM}_n} - 1\right) \times 100"),
-        ("md", "Positivo: el precio está por encima de la media. Es una referencia descriptiva, no una señal de compra o venta."),
+        ("md", "**Dónde:** *P* es el último precio de cierre y *MM n* es el valor de la media móvil (50 o 200) ese mismo día. El × 100 lo expresa en %.\n\nPositivo: el precio está por encima de la media. Es una referencia descriptiva, no una señal de compra o venta."),
     ],
     "estado": [
         ("md", "Clasifica cada sector con dos preguntas:\n\n1. **¿Va mejor que el S&P 500 en el periodo?** (fuerza relativa mayor o igual que 0)\n2. **¿Gana fuerza?** Es su *momentum*: si ha ido mejor que el S&P 500 en el último cuarto del periodo (mínimo 5 sesiones)."),
         ("tex", r"k = \max\left(5, \frac{n}{4}\right)"),
         ("tex", r"\begin{aligned}\text{Momentum} &= r^{k}_{\text{sector}} - r^{k}_{\text{S\&P 500}}\\ r^{k} &= \frac{P_t}{P_{t-k}} - 1\end{aligned}"),
-        ("md", "Aquí *n* es el número de sesiones del periodo y *k* las del tramo reciente.\n\n- **Liderando:** fuerza relativa ≥ 0 y momentum ≥ 0.\n- **Debilitándose:** fuerza relativa ≥ 0 y momentum < 0.\n- **Mejorando:** fuerza relativa < 0 y momentum ≥ 0.\n- **Rezagados:** fuerza relativa < 0 y momentum < 0.\n\nEs una versión sencilla de los gráficos de rotación sectorial. Describe lo que ha pasado, no predice lo que pasará.\n\nCon **Ver qué pasó después** se añade una tabla que compara el estado de cada sector en la fecha de análisis con su estado al final del horizonte elegido, calculado igual y con el mismo periodo. ▲ indica que ha mejorado (por ejemplo, de Rezagados a Mejorando), ▼ que ha empeorado y = que no ha cambiado."),
+        ("md", "**Dónde:** *n* es el número de sesiones (días de mercado) del periodo elegido y *k*, cuántas sesiones tiene el tramo reciente (mínimo 5). *r k* es lo que ha subido o bajado en ese tramo (en %): *P t* es el cierre del último día (la fecha de análisis) y *P t−k*, el cierre de *k* sesiones antes. El momentum es la diferencia entre el *r k* del sector y el del S&P 500.\n\n- **Liderando:** fuerza relativa ≥ 0 y momentum ≥ 0.\n- **Debilitándose:** fuerza relativa ≥ 0 y momentum < 0.\n- **Mejorando:** fuerza relativa < 0 y momentum ≥ 0.\n- **Rezagados:** fuerza relativa < 0 y momentum < 0.\n\nEs una versión sencilla de los gráficos de rotación sectorial. Describe lo que ha pasado, no predice lo que pasará.\n\nCon **Ver qué pasó después** se añade una tabla que compara el estado de cada sector en la fecha de análisis con su estado al final del horizonte elegido, calculado igual y con el mismo periodo. ▲ indica que ha mejorado (por ejemplo, de Rezagados a Mejorando), ▼ que ha empeorado y = que no ha cambiado."),
     ],
 }
 
 
-def sec(title: str, right: str = "", info_key: str = "plain"):
+def sec(title: str, right: str = "", info_key: str = "plain", chip: str = ""):
     """Título de bloque con un botón ⓘ que abre la explicación."""
     with st.container(key=f"hdr_{info_key}"):
         left, btn = st.columns([6, 1])
-        left.markdown(f"<div class='sec'>{title}<span>{right}</span></div>", unsafe_allow_html=True)
+        left.markdown(f"<div class='sec'><span class='t'>{title}</span><span class='r'>{right}</span>{chip}</div>",
+                      unsafe_allow_html=True)
         if info_key in INFO:
             with btn.popover("ⓘ"):
                 for kind, text in INFO[info_key]:
                     (st.latex if kind == "tex" else st.markdown)(text)
 
 
-def card(label: str, value: str, change: str) -> str:
-    return (f"<div class='card'><div class='l'>{label}</div>"
-            f"<div class='v'>{value}</div><div class='c'>{change}</div></div>")
+def card(label: str, value: str, change: str, after: str = "", bg: str = "", lvl: str = "") -> str:
+    extra = f"<div class='a'>{after}</div>" if after else ""
+    lv = f"<div class='lv'>{lvl}</div>" if lvl else ""
+    style = f" style='background:{bg}'" if bg else ""
+    return (f"<div class='card'{style}><div class='l'>{label}</div>"
+            f"<div class='v'>{value}</div>{lv}<div class='c'>{change}</div>{extra}</div>")
 
 
 def grid(items: list[str], cls: str = "") -> str:
@@ -396,6 +452,7 @@ def dashboard():
         horizon = horizon_picker(last, full.index[-1], "horizonte")
     fut_end = after_end(last, horizon, full.index[-1])
     after = fut_end is not None
+    after_lbl = "hasta hoy" if horizon == "Hasta hoy" else horizon
     ref = ref_date(last, period)
     ret = (prices.iloc[-1] / value_at(prices, ref) - 1) * 100
     if ret[TICKERS + [BENCH]].isna().any():
@@ -419,24 +476,57 @@ def dashboard():
     # --- contexto macro
     sec("Contexto macro", "cambio en el periodo", "macro")
     cards = []
+
+    def aft(value_txt: str, delta_txt: str) -> str:
+        """Línea 'Después' de cada tarjeta (solo con un horizonte elegido)."""
+        return f"Después ({after_lbl}): {value_txt} ({delta_txt} desde la fecha)" if after else ""
+
     if "^VIX" in prices:
         vix = prices["^VIX"].dropna()
+        vix_f = full["^VIX"].dropna().loc[:fut_end].iloc[-1] if after else None
+        lvl, bg = macro_level("vix", vix.iloc[-1])
         cards.append(card("VIX (miedo)", fmt(vix.iloc[-1], 1, False),
-                          f"{fmt(vix.iloc[-1] - vix.asof(ref))} pts"))
+                          f"{fmt(vix.iloc[-1] - vix.asof(ref))} pts",
+                          aft(fmt(vix_f, 1, False), f"{fmt(vix_f - vix.iloc[-1])} pts") if after else "",
+                          bg, lvl))
     key = fred_key()
     if key:
         try:
-            y10 = fred("DGS10", key).loc[:last]
-            curve = fred("T10Y2Y", key).loc[:last]
-            cpi = fred("CPIAUCSL", key).loc[:last - pd.Timedelta(days=45)]  # retraso de publicación del IPC
+            y10_all, curve_all = fred("DGS10", key), fred("T10Y2Y", key)
+            cpi_all = fred("CPIAUCSL", key)
+            y10, curve = y10_all.loc[:last], curve_all.loc[:last]
+            cpi = cpi_all.loc[:last - pd.Timedelta(days=45)]  # retraso de publicación del IPC
             yoy = ((cpi / cpi.shift(12) - 1) * 100).dropna()
+            real = y10.iloc[-1] - yoy.iloc[-1]  # rentabilidad real aproximada
+            real_ref = y10.asof(ref) - yoy.asof(ref)
+            y10_f = curve_f = yoy_f = real_f = None
+            if after:
+                y10_f = y10_all.loc[:fut_end].iloc[-1]
+                curve_f = curve_all.loc[:fut_end].iloc[-1]
+                cpi_f = cpi_all.loc[:fut_end - pd.Timedelta(days=45)]
+                yoy_f = ((cpi_f / cpi_f.shift(12) - 1) * 100).dropna().iloc[-1]
+                real_f = y10_f - yoy_f
+            lb, bb = macro_level("bono", y10.iloc[-1])
+            lr, br = macro_level("real", real)
+            lc, bc = macro_level("curva", curve.iloc[-1])
+            li, bi = macro_level("infl", yoy.iloc[-1])
             cards += [
                 card("Bono 10 años", f"{fmt(y10.iloc[-1], 2, False)}%",
-                     f"{fmt(y10.iloc[-1] - y10.asof(ref), 2)} pp"),
+                     f"{fmt(y10.iloc[-1] - y10.asof(ref), 2)} pp",
+                     aft(f"{fmt(y10_f, 2, False)}%", f"{fmt(y10_f - y10.iloc[-1], 2)} pp") if after else "",
+                     bb, lb),
+                card("Bono real (aprox.)", f"{fmt(real, 2, False)}%",
+                     f"{fmt(real - real_ref, 2)} pp",
+                     aft(f"{fmt(real_f, 2, False)}%", f"{fmt(real_f - real, 2)} pp") if after else "",
+                     br, lr),
                 card("Curva 10a-2a", fmt(curve.iloc[-1], 2),
-                     f"{fmt(curve.iloc[-1] - curve.asof(ref), 2)} pp"),
+                     f"{fmt(curve.iloc[-1] - curve.asof(ref), 2)} pp",
+                     aft(fmt(curve_f, 2), f"{fmt(curve_f - curve.iloc[-1], 2)} pp") if after else "",
+                     bc, lc),
                 card("Inflación anual", f"{fmt(yoy.iloc[-1], 1, False)}%",
-                     f"{fmt(yoy.iloc[-1] - yoy.asof(ref), 1)} pp"),
+                     f"{fmt(yoy.iloc[-1] - yoy.asof(ref), 1)} pp",
+                     aft(f"{fmt(yoy_f, 1, False)}%", f"{fmt(yoy_f - yoy.iloc[-1], 1)} pp") if after else "",
+                     bi, li),
             ]
         except Exception as e:
             st.warning(f"No se pudieron cargar los datos de FRED: {e}")
@@ -446,8 +536,20 @@ def dashboard():
         px_ref = value_at(prices, ref)
         r_now = prices["XLY"].iloc[-1] / prices["XLP"].iloc[-1]
         r_ref = px_ref["XLY"] / px_ref["XLP"]
-        cards.append(card("Discrecional / básico", fmt(r_now, 2, False), f"{fmt((r_now / r_ref - 1) * 100)}%"))
+        r_f = full["XLY"].loc[:fut_end].iloc[-1] / full["XLP"].loc[:fut_end].iloc[-1] if after else None
+        r_chg = (r_now / r_ref - 1) * 100
+        r_sat = RATIO_SAT[period]
+        r_lvl = ("Más apetito por riesgo" if r_chg >= r_sat / 4
+                 else "Más cautela" if r_chg <= -r_sat / 4 else "Sin cambio claro")
+        cards.append(card("Discrecional / básico", fmt(r_now, 2, False), f"{fmt(r_chg)}%",
+                          aft(fmt(r_f, 2, False), f"{fmt((r_f / r_now - 1) * 100)}%") if after else "",
+                          tile_color(r_chg, r_sat), r_lvl))
     st.markdown(grid(cards, "cards"), unsafe_allow_html=True)
+    st.markdown(
+        "<div class='note'>Color según el nivel: verde normal o tranquilo, ámbar elevado, rojo alto o tensión, "
+        "azul muy bajo. Indica el nivel, no si es bueno o malo para ti. Las escalas están en el botón ⓘ.</div>",
+        unsafe_allow_html=True,
+    )
 
     # --- mapa de calor (cada casilla enlaza al gráfico del sector)
     sec("Mapa de calor por sector", "toca un sector para ver su gráfico", "mapa")
@@ -482,7 +584,8 @@ def dashboard():
     left, right = st.columns([3, 2], gap="large")
 
     with left:
-        sec("Fuerza relativa frente al S&amp;P 500", f"S&amp;P 500: {fmt(spy)}%", "fuerza")
+        sec("Fuerza relativa frente al S&amp;P 500", "", "fuerza",
+            chip=f"<span class='chip' style='background:{tile_color(spy, sat)}'>S&amp;P 500: {fmt(spy)}%</span>")
         mx = max(abs(v) for v in rel.values()) or 1
         rows = ""
         for t in sorted(TICKERS, key=rel.get, reverse=True):
@@ -808,8 +911,7 @@ def resources():
             "- Tabla de sectores y fases del ciclo, con la fase que mejor encaja con el liderazgo actual.\n"
             "- Revisar qué sectores cuentan como cíclicos (hoy tecnología y energía quedan fuera).\n"
             "- Materias primas (petróleo, cobre, oro) junto a los bonos en el contexto macro.\n"
-            "- Versión europea del panel (STOXX 600 o MSCI Europe).\n"
-            "- Etiqueta alto/bajo directamente en la tarjeta del bono."
+            "- Versión europea del panel (STOXX 600 o MSCI Europe)."
         )
 
 
