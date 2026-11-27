@@ -90,7 +90,7 @@ a.tile:hover{filter:brightness(1.1)}
 
 @media (min-width:700px){
   .grid.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
-  .grid.cards{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .grid.cards{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
   .tile{padding:12px 14px}
   .tile .n{font-size:.95rem}
   .tile .d{font-size:.75rem}
@@ -274,13 +274,18 @@ INFO = {
         ("md", "**Bono 10 años:** rentabilidad anual que paga el bono del Tesoro de EE. UU. a 10 años (dato directo de FRED). Su cambio se mide en puntos porcentuales (pp). ¿Está alto o bajo? Depende de con qué lo compares.\n\n**1. Frente a su historia reciente:**\n\n| Rentabilidad | Lectura |\n|---|---|\n| Menos de 2% | Muy baja (típica de 2020–2021) |\n| 2% – 3% | Baja |\n| 3% – 4% | Media |\n| 4% – 5% | Alta |\n| Más de 5% | Muy alta (máximos desde 2007) |\n\nReferencias: el máximo histórico semanal fue 15,68% (octubre de 1981) y el mínimo, 0,55% (agosto de 2020). La media anual fue 0,89% en 2020, 1,45% en 2021, 2,95% en 2022, 3,96% en 2023 y 4,19% en 2024. A finales de octubre de 2026 rondaba el 5% (dato fechado: puede haber cambiado)."),
         ("md", "**2. Frente a la inflación** (rentabilidad real aproximada): un bono que rinde un 4% con una inflación del 3,5% da muy poco en términos reales."),
         ("tex", r"\text{Rentab. real} \approx \text{bono 10 años} - \text{inflación anual}"),
-        ("md", "| Rentabilidad real | Lectura |\n|---|---|\n| Negativa | Muy baja: no compensa la inflación |\n| 0% – 1% | Baja |\n| 1% – 2% | Media |\n| Más de 2% | Alta |\n\n**Qué suele implicar:** con rentabilidades altas el dinero es caro, lo que suele presionar a inmobiliario, servicios públicos y empresas muy endeudadas o de crecimiento, y puede favorecer a los bancos hasta cierto punto. Con rentabilidades bajas ocurre lo contrario. Son tendencias generales, no reglas."),
+        ("md", "| Rentabilidad real | Lectura |\n|---|---|\n| Negativa | Muy baja: no compensa la inflación |\n| 0% – 1% | Baja |\n| 1% – 2% | Media |\n| Más de 2% | Alta |"),
+        ("md", "**Qué implica que el bono a 10 años suba o baje**\n\nIdea clave: el precio de un bono y su rentabilidad van en sentido contrario. Si los inversores venden bonos, su precio baja y su rentabilidad sube; si los compran, ocurre lo contrario. Esa rentabilidad es la referencia de lo que cuesta el dinero a largo plazo: hipotecas, créditos a empresas y la valoración de casi cualquier activo se miden contra ella.\n\n**Si está alta o sube:**\n- El crédito es más caro (hipotecas, deuda de empresas).\n- Los bonos compiten mejor con las acciones, y los beneficios futuros valen menos hoy.\n- Suelen sufrir más: inmobiliario, servicios públicos, empresas muy endeudadas y de crecimiento, como buena parte de tecnología.\n- Suelen aguantar mejor: bancos y aseguradoras, hasta cierto punto.\n\n**Si está baja o baja:**\n- El crédito es más barato y las acciones resultan más atractivas frente a los bonos.\n- Suelen beneficiarse: inmobiliario, servicios públicos y crecimiento.\n- Suelen notarlo los bancos, por un margen de intereses más estrecho."),
+        ("md", "**Por qué se mueve:** sube cuando el mercado espera más crecimiento, más inflación o tipos más altos de los bancos centrales; baja cuando espera una economía más débil, menos inflación o recortes de tipos, y también cuando los inversores buscan refugio. Por eso **el mismo nivel puede significar cosas distintas**: una subida porque la economía va fuerte suele sentar bien a la bolsa; una subida por miedo a la inflación, mal. Los movimientos bruscos suelen importar más que el nivel. Conviene mirarlo junto con la inflación (rentabilidad real) y con la curva 10a-2a. Son tendencias generales, no reglas."),
         ("md", "**Curva 10a-2a:** diferencia entre la rentabilidad del bono a 10 años y la del bono a 2 años."),
         ("tex", r"\begin{aligned}\text{Curva} &= \text{rentab. bono 10 años}\\ &\quad - \text{rentab. bono 2 años}\end{aligned}"),
         ("md", "| Curva (pp) | Lectura |\n|---|---|\n| Más de +1 | Pronunciada |\n| 0 a +1 | Normal o plana |\n| Negativa | Invertida: históricamente ha precedido a recesiones, aunque a veces da falsas alarmas |"),
         ("md", "**Inflación anual:** cuánto han subido los precios (IPC de EE. UU.) respecto al mismo mes del año anterior. Se publica una vez al mes y con retraso. El objetivo de la Reserva Federal es un 2%; por encima de un 3% se considera alta."),
         ("tex", r"\text{Inflación} = \left(\frac{IPC_t}{IPC_{t-12}} - 1\right) \times 100"),
         ("md", "Aquí *t* es el mes actual y *t−12*, el mismo mes del año anterior."),
+        ("md", "**Discrecional / básico:** compara el precio del ETF de consumo discrecional (coches, ropa, ocio) con el de consumo básico (alimentación, higiene). Si sube, los inversores prefieren lo que depende de que la gente gaste con confianza; si baja, prefieren lo que se consume siempre. Es una pista del apetito por el riesgo del mercado, no una señal."),
+        ("tex", r"\text{Ratio} = \frac{P_{\text{discrecional}}}{P_{\text{básico}}}"),
+        ("md", "El valor del ratio en sí no importa (depende de los precios de los dos ETFs); lo que importa es su **cambio en el periodo**, que aparece bajo la cifra. A veces gira antes que el mercado, pero no siempre acierta."),
     ],
     "mapa": [
         ("md", "Cada casilla es un sector del S&P 500 con lo que ha subido o bajado en el periodo elegido. Cada sector se sigue con un ETF de SPDR, un fondo que replica ese sector. **Toca una casilla para abrir el gráfico de velas de ese sector.**"),
@@ -437,6 +442,11 @@ def dashboard():
             st.warning(f"No se pudieron cargar los datos de FRED: {e}")
     else:
         st.info("Añade tu clave FRED_API_KEY para ver tipos, curva e inflación.")
+    if "XLY" in prices and "XLP" in prices:
+        px_ref = value_at(prices, ref)
+        r_now = prices["XLY"].iloc[-1] / prices["XLP"].iloc[-1]
+        r_ref = px_ref["XLY"] / px_ref["XLP"]
+        cards.append(card("Discrecional / básico", fmt(r_now, 2, False), f"{fmt((r_now / r_ref - 1) * 100)}%"))
     st.markdown(grid(cards, "cards"), unsafe_allow_html=True)
 
     # --- mapa de calor (cada casilla enlaza al gráfico del sector)
@@ -771,6 +781,38 @@ def detail(ticker: str):
     )
 
 
+def resources():
+    with st.expander("Recursos y para aprender más"):
+        st.markdown("**Lecturas**")
+        st.markdown(
+            "- [StockCharts ChartSchool: Sector Rotation Analysis](https://chartschool.stockcharts.com/table-of-contents/market-analysis/sector-rotation-analysis) (inglés): cómo se relaciona la rotación de sectores con el ciclo económico.\n"
+            "- [Clasificación sectorial de la Bolsa española (BME)](https://www.bolsasymercados.es/dam/descargas/exchange/renta-variable/clasificacion-sectorial-bme-renta-variable-es.pdf): los siete sectores de la bolsa española.\n"
+            "- [STOXX: clasificación ICB](https://stoxx.com/stoxx-indices-incorporate-new-icb-framework/) (inglés): los supersectores del STOXX Europe 600.\n"
+            "- FRED, fuente de los datos macro: [bono 10 años](https://fred.stlouisfed.org/series/DGS10), "
+            "[curva 10a-2a](https://fred.stlouisfed.org/series/T10Y2Y), [IPC](https://fred.stlouisfed.org/series/CPIAUCSL)."
+        )
+        st.markdown("**Fichas de cada sector en Investing.com**")
+        st.markdown("\n".join(f"- [{NAME[t]} ({EN[t]})]({INVESTING[t]})" for t in TICKERS))
+        st.markdown("**Conceptos**")
+        st.markdown(
+            "- **Rendimiento acumulado** (en StockCharts, *PerfChart*): un gráfico con una línea por sector, todas "
+            "empezando en 0 % el mismo día, que muestra cuánto ha subido o bajado cada una desde entonces. El mapa de "
+            "calor es una foto del periodo; este gráfico enseña cuándo un sector adelanta a otro.\n"
+            "- **Ratio discrecional / básico:** ya está en el contexto macro; su botón ⓘ lo explica.\n"
+            "- **Fases del ciclo y sectores:** modelo teórico que relaciona qué sectores suelen liderar en cada fase "
+            "de la economía. Es una guía histórica, no una regla; la página de StockCharts lo explica con detalle."
+        )
+        st.markdown("**Ideas para más adelante**")
+        st.markdown(
+            "- Gráfico de rendimiento acumulado por sector desde una fecha.\n"
+            "- Tabla de sectores y fases del ciclo, con la fase que mejor encaja con el liderazgo actual.\n"
+            "- Revisar qué sectores cuentan como cíclicos (hoy tecnología y energía quedan fuera).\n"
+            "- Materias primas (petróleo, cobre, oro) junto a los bonos en el contexto macro.\n"
+            "- Versión europea del panel (STOXX 600 o MSCI Europe).\n"
+            "- Etiqueta alto/bajo directamente en la tarjeta del bono."
+        )
+
+
 # ---------------------------------------------------------------- enrutado
 st.markdown(CSS, unsafe_allow_html=True)
 _sector = st.query_params.get("sector")
@@ -779,3 +821,4 @@ if _sector in TICKERS:
 else:
     st.markdown("### Sectores del S&P 500")
     dashboard()
+    resources()
