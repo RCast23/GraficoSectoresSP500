@@ -4,6 +4,7 @@ Precios: yfinance (ETFs sectoriales SPDR + SPY + VIX).
 Macro: FRED (tipos, curva, inflación). Es opcional: sin clave, solo se muestra el VIX.
 Herramienta de seguimiento y aprendizaje, no asesoramiento financiero.
 """
+import base64
 import os
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -38,6 +39,7 @@ EN = {  # nombres en inglés (clasificación GICS), para reconocerlos en otras w
     "XLF": "Financials", "XLI": "Industrials", "XLB": "Materials", "XLRE": "Real Estate",
     "XLV": "Health Care", "XLP": "Consumer Staples", "XLU": "Utilities", "XLE": "Energy",
 }
+GROUP_SHORT = {"ciclico": "Cíclico", "defensivo": "Defensivo", "otro": "Otro"}
 BENCH = "SPY"
 PERIODS = ["1S", "1M", "3M", "6M", "YTD", "1A"]
 # A partir de este % (en valor absoluto) el color del mapa de calor llega al máximo
@@ -58,6 +60,9 @@ CSS = """
 .tile .en{font-size:.7rem;opacity:.75;font-style:italic;line-height:1.2;margin-top:1px}
 .tile .d{font-size:.7rem;opacity:.7;margin:1px 0 6px;line-height:1.25}
 .tile .v{font-size:1rem;font-weight:600;text-align:right}
+.bt{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.gp{font-size:.66rem;padding:1px 7px;border-radius:999px;border:1px solid rgba(128,128,128,.45);opacity:.85;white-space:nowrap}
+.spark{width:100%;height:46px;display:block;margin:6px 0 4px}
 a.tile{display:block;text-decoration:none!important;color:inherit!important}
 a.tile:hover{filter:brightness(1.1)}
 .card{background:rgba(128,128,128,.12);border-radius:10px;padding:10px 12px}
@@ -95,6 +100,8 @@ a.tile:hover{filter:brightness(1.1)}
 @media (min-width:700px){
   .grid.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
   .grid.cards{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+  .grid.macro{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .spark{height:60px}
   .tile{padding:12px 14px}
   .tile .n{font-size:.95rem}
   .tile .d{font-size:.75rem}
@@ -339,7 +346,7 @@ INFO = {
         ("md", "**Dónde:** *P discrecional* es el precio de cierre del ETF de consumo discrecional y *P básico*, el del ETF de consumo básico. El valor del ratio en sí no importa (depende de los precios de los dos ETFs); lo que importa es su **cambio en el periodo**, que aparece bajo la cifra. A veces gira antes que el mercado, pero no siempre acierta.\n\nSe colorea con el método del mapa de calor: gris si no cambia y verde o rojo más intenso cuanto mayor es el cambio, hasta ±2% (1S), ±4% (1M), ±7% (3M), ±10% (6M), ±12% (YTD) y ±17% (1A). Si el cambio supera un cuarto de ese umbral, el nivel dice *Más apetito por riesgo* (sube) o *Más cautela* (baja)."),
     ],
     "mapa": [
-        ("md", "Cada casilla es un sector del S&P 500 con lo que ha subido o bajado en el periodo elegido. Cada sector se sigue con un ETF de SPDR, un fondo que replica ese sector. **Toca una casilla para abrir el gráfico de velas de ese sector.**"),
+        ("md", "Cada casilla es un sector del S&P 500 con lo que ha subido o bajado en el periodo elegido. Cada sector se sigue con un ETF de SPDR, un fondo que replica ese sector. **Toca una casilla para abrir el gráfico de velas de ese sector.**\n\n**Cíclico / Defensivo / Otro:** etiqueta de cada casilla según la clasificación simplificada del panel, la misma de la vista de ciclo. Tecnología, comunicaciones, inmobiliario y energía aparecen como *Otro* porque no entran en ninguno de los dos grupos.\n\n**Ver tendencias:** el interruptor cambia las casillas por gráficas pequeñas. Cada línea muestra lo que ha subido o bajado el sector desde el inicio del periodo, empezando en 0 % (línea discontinua), con el S&P 500 en gris como referencia. Todas usan la misma escala vertical para poder compararse; los sectores que casi no se mueven quedan como líneas casi planas. Con *Ver qué pasó después*, la línea continúa más tenue tras la fecha de análisis."),
         ("tex", r"\text{Rendimiento} = \left(\frac{P_{\text{final}}}{P_{\text{inicio}}} - 1\right) \times 100"),
         ("md", "**Dónde:**\n- **P final:** último precio disponible en la fecha de análisis.\n- **P inicio:** último cierre en la fecha de inicio del periodo (hace 7 días, 1, 3, 6 o 12 meses; en YTD, el último cierre del año anterior).\n- El × 100 convierte el resultado en %.\n- Los precios están ajustados por dividendos, así que el resultado incluye lo que reparten.\n\n**Color:** el gris es 0%. Cuanto más se aleja de 0, más intenso es el verde (sube) o el rojo (baja), hasta llegar al color máximo en un umbral que depende del periodo."),
         ("tex", r"\text{intensidad} = \min\left(\frac{|\text{rendimiento}|}{\text{umbral}}, 1\right)"),
@@ -396,6 +403,43 @@ def card(label: str, value: str, change: str, after: str = "", bg: str = "", lvl
 
 def grid(items: list[str], cls: str = "") -> str:
     return f"<div class='grid {cls}'>" + "".join(items) + "</div>"
+
+
+def sparkline_uri(vals, ref_vals, lo, hi, color, cut=None) -> str:
+    """Minigráfica de línea como imagen SVG (data URI).
+
+    vals / ref_vals: rendimiento acumulado (%) por sesión, empezando en 0 (sector y S&P 500).
+    lo, hi: límites verticales comunes a todas las gráficas. cut: índice donde empieza lo posterior
+    a la fecha de análisis (se dibuja más tenue, con una línea vertical).
+    """
+    n = len(vals)
+    W, H = 100.0, 40.0
+    span = (hi - lo) or 1.0
+    den = max(n - 1, 1)
+
+    def pt(i, v):
+        return f"{i / den * W:.1f},{H - (v - lo) / span * H:.1f}"
+
+    def line(seq, idxs, stroke, width, opacity=1.0):
+        pts = " ".join(pt(i, seq[i]) for i in idxs)
+        return (f"<polyline points='{pts}' fill='none' stroke='{stroke}' stroke-width='{width}' "
+                f"stroke-opacity='{opacity}' stroke-linejoin='round' stroke-linecap='round' "
+                "vector-effect='non-scaling-stroke'/>")
+
+    y0 = H - (0 - lo) / span * H
+    body = (f"<line x1='0' y1='{y0:.1f}' x2='{W:.0f}' y2='{y0:.1f}' stroke='#808080' stroke-opacity='.55' "
+            "stroke-width='1' stroke-dasharray='3 3' vector-effect='non-scaling-stroke'/>")
+    body += line(ref_vals, range(n), "#808080", 1, 0.8)  # S&P 500 como referencia
+    end = n if cut is None else cut + 1
+    body += line(vals, range(end), color, 1.8)
+    if cut is not None and cut + 1 < n:
+        body += line(vals, range(cut, n), color, 1.8, 0.45)
+        xc = cut / den * W
+        body += (f"<line x1='{xc:.1f}' y1='0' x2='{xc:.1f}' y2='{H:.0f}' stroke='#808080' stroke-opacity='.6' "
+                 "stroke-width='1' stroke-dasharray='2 2' vector-effect='non-scaling-stroke'/>")
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {W:.0f} {H:.0f}' "
+           f"preserveAspectRatio='none'>{body}</svg>")
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode()
 
 
 STATE_RANK = {"Rezagados": 0, "Mejorando": 1, "Debilitándose": 2, "Liderando": 3}
@@ -544,7 +588,7 @@ def dashboard():
         cards.append(card("Discrecional / básico", fmt(r_now, 2, False), f"{fmt(r_chg)}%",
                           aft(fmt(r_f, 2, False), f"{fmt((r_f / r_now - 1) * 100)}%") if after else "",
                           tile_color(r_chg, r_sat), r_lvl))
-    st.markdown(grid(cards, "cards"), unsafe_allow_html=True)
+    st.markdown(grid(cards, "cards macro"), unsafe_allow_html=True)
     st.markdown(
         "<div class='note'>Color según el nivel: verde normal o tranquilo, ámbar elevado, rojo alto o tensión, "
         "azul muy bajo. Indica el nivel, no si es bueno o malo para ti. Las escalas están en el botón ⓘ.</div>",
@@ -558,25 +602,72 @@ def dashboard():
     dpar = "" if live else f"&amp;d={asof.isoformat()}"
     fut = (value_at(full, fut_end) / prices.iloc[-1] - 1) * 100 if after else None
     after_lbl = "hasta hoy" if horizon == "Hasta hoy" else horizon
-    tiles = [
-        f"<a class='tile' href='?sector={t}&amp;p={period}{dpar}' target='_self' "
-        f"style='background:{tile_color(ret[t], sat)}'>"
-        f"<div class='n'>{info[t][1]}</div><div class='en'>{EN[t]}</div><div class='d'>{info[t][2]}</div>"
-        f"<div class='v'>{fmt(ret[t])}%</div>"
-        + (f"<div class='af'>Después ({after_lbl}): {fmt(fut[t])}%</div>" if after else "")
-        + "</a>"
-        for t in order
-    ]
-    st.markdown(grid(tiles, "tiles"), unsafe_allow_html=True)
-    swatches = "".join(
-        f"<i style='background:{tile_color(v, sat)}'></i>"
-        for v in (-sat, -sat / 2, 0, sat / 2, sat)
-    )
-    st.markdown(
-        f"<div class='legend'><span>-{sat}%</span>{swatches}<span>+{sat}%</span>"
-        f"<span style='width:100%'>Color máximo a partir de ±{sat}% en este periodo</span></div>",
-        unsafe_allow_html=True,
-    )
+    trends = st.toggle("Ver tendencias (gráficas pequeñas)", value=False, key="tendencias")
+
+    def href(t: str) -> str:
+        return f"?sector={t}&amp;p={period}{dpar}"
+
+    def after_txt(t: str) -> str:
+        return f"<div class='af'>Después ({after_lbl}): {fmt(fut[t])}%</div>" if after else ""
+
+    if not trends:
+        tiles = [
+            f"<a class='tile' href='{href(t)}' target='_self' "
+            f"style='background:{tile_color(ret[t], sat)}'>"
+            f"<div class='n'>{info[t][1]}</div><div class='en'>{EN[t]}</div><div class='d'>{info[t][2]}</div>"
+            f"<div class='bt'><span class='gp'>{GROUP_SHORT[info[t][3]]}</span><span class='v'>{fmt(ret[t])}%</span></div>"
+            + after_txt(t)
+            + "</a>"
+            for t in order
+        ]
+        st.markdown(grid(tiles, "tiles"), unsafe_allow_html=True)
+        swatches = "".join(
+            f"<i style='background:{tile_color(v, sat)}'></i>"
+            for v in (-sat, -sat / 2, 0, sat / 2, sat)
+        )
+        st.markdown(
+            f"<div class='legend'><span>-{sat}%</span>{swatches}<span>+{sat}%</span>"
+            f"<span style='width:100%'>Color máximo a partir de ±{sat}% en este periodo</span></div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        # rendimiento acumulado desde el inicio del periodo (empieza en 0 %), por sesión
+        cols = TICKERS + [BENCH]
+        base = value_at(prices, ref)
+        hist = (prices[cols].loc[ref:] / base - 1) * 100
+        series = {c: hist[c].tolist() for c in cols}
+        if hist.index[0] > ref:  # el periodo empieza en un día sin mercado: la línea parte de 0
+            series = {c: [0.0] + v for c, v in series.items()}
+        n_hist = len(series[BENCH])
+        cut = None
+        if after:
+            post = (full[cols].loc[last + pd.Timedelta(days=1):fut_end] / base - 1) * 100
+            if len(post):
+                series = {c: v + post[c].tolist() for c, v in series.items()}
+                cut = n_hist - 1
+        flat = [x for v in series.values() for x in v]
+        lo, hi = min(0.0, min(flat)), max(0.0, max(flat))
+        pad = (hi - lo) * 0.08 or 1.0
+        lo, hi = lo - pad, hi + pad  # misma escala vertical para todos los sectores
+        tiles = []
+        for t in order:
+            col = GREEN_HEX if ret[t] >= 0 else RED_HEX
+            uri = sparkline_uri(series[t], series[BENCH], lo, hi, col, cut)
+            tiles.append(
+                f"<a class='tile' href='{href(t)}' target='_self' style='background:rgba(128,128,128,.12)'>"
+                f"<div class='n'>{info[t][1]}</div><div class='en'>{EN[t]}</div>"
+                f"<img class='spark' src='{uri}' alt='Tendencia de {info[t][1]}'/>"
+                f"<div class='bt'><span class='gp'>{GROUP_SHORT[info[t][3]]}</span>"
+                f"<span class='v' style='color:{col}'>{fmt(ret[t])}%</span></div>{after_txt(t)}</a>"
+            )
+        st.markdown(grid(tiles, "tiles"), unsafe_allow_html=True)
+        tenue = " Tramo tenue: lo ocurrido después de la fecha de análisis." if cut is not None else ""
+        st.markdown(
+            "<div class='legend'><span style='width:100%'>Cada línea muestra lo que ha subido o bajado el sector "
+            "desde el inicio del periodo (empieza en 0 %, línea discontinua). Línea gris: S&amp;P 500. "
+            f"Todas comparten la misma escala vertical.{tenue}</span></div>",
+            unsafe_allow_html=True,
+        )
 
     rel = {t: ret[t] - spy for t in TICKERS}
     # en pantallas grandes: fuerza relativa a la izquierda, ciclo y estados a la derecha;
